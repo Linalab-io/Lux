@@ -1,0 +1,33 @@
+{
+  "name": "com.linalab.lux",
+  "version": "0.1.0",
+  "displayName": "Lux",
+  "description": "Unified Unity Editor AI adapter connecting external terminals, AI clients, Git, integrated Codex Image generation, and remote control protocols.",
+  "unity": "6000.0",
+  "author": {
+    "name": "Linalab.io",
+    "url": "https://github.com/Linalab-io"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Linalab-io/lux.git"
+  },
+  "documentationUrl": "https://github.com/Linalab-io/lux",
+  "dependencies": {
+    "com.linalab.unity-log": "0.0.1",
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "com.unity.test-framework": "1.1.33",
+    "com.unity.ugui": "1.0.0"
+  },
+  "keywords": [
+    "unity",
+    "editor",
+    "ai",
+    "git",
+    "adapter",
+    "codex-image",
+    "webrtc",
+    "linalab",
+    "lux"
+  ]
+}
