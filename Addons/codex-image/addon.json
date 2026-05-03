@@ -1,0 +1,12 @@
+{
+  "name": "codex-image",
+  "displayName": "Codex Image Pipeline",
+  "version": "1.0.0",
+  "description": "Node-based image generation pipeline and Unity asset exporters.",
+  "category": "image-generation",
+  "defineSymbols": ["LUX_CODEX_IMAGE"],
+  "requiredPackages": {},
+  "addonDependencies": {},
+  "assemblies": ["Linalab.UnityCodexImage.Editor"],
+  "keywords": ["codex", "image", "pipeline"]
+}

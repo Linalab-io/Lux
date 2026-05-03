@@ -1,0 +1,26 @@
+{
+  "name": "Linalab.Lux.PipelineEditor.Editor.Tests",
+  "rootNamespace": "Linalab.Lux.PipelineEditor.Editor.Tests",
+  "references": [
+    "nunit.framework",
+    "Linalab.Lux.PipelineEditor.Editor",
+    "Linalab.UnityCodexImage.Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "LUX_PIPELINE_EDITOR",
+    "LUX_CODEX_IMAGE"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Linalab.Lux.PipelineEditor.Editor",
+  "rootNamespace": "Linalab.Lux.PipelineEditor.Editor",
+  "references": [
+    "Linalab.UnityCodexImage.Editor",
+    "Linalab.Lux.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "LUX_PIPELINE_EDITOR",
+    "LUX_CODEX_IMAGE"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

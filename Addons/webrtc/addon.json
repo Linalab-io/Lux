@@ -1,0 +1,14 @@
+{
+  "name": "webrtc",
+  "displayName": "WebRTC Remote Streaming",
+  "version": "1.0.0",
+  "description": "WebRTC remote streaming and browser-based Unity control.",
+  "category": "streaming",
+  "defineSymbols": ["LUX_WEBRTC"],
+  "requiredPackages": {
+    "com.unity.webrtc": "3.0.0"
+  },
+  "addonDependencies": {},
+  "assemblies": ["Linalab.Lux.WebRTC.Editor"],
+  "keywords": ["webrtc", "remote", "streaming"]
+}

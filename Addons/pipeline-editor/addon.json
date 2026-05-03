@@ -1,0 +1,14 @@
+{
+  "name": "pipeline-editor",
+  "displayName": "Visual Pipeline Editor",
+  "version": "1.0.0",
+  "description": "ReactFlow visual graph editor for Codex Image pipelines.",
+  "category": "pipeline",
+  "defineSymbols": ["LUX_PIPELINE_EDITOR"],
+  "requiredPackages": {},
+  "addonDependencies": {
+    "codex-image": "1.0.0"
+  },
+  "assemblies": ["Linalab.Lux.PipelineEditor.Editor"],
+  "keywords": ["pipeline", "graph", "editor"]
+}

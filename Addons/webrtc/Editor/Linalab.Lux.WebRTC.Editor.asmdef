@@ -1,0 +1,20 @@
+{
+    "name": "Linalab.Lux.WebRTC.Editor",
+    "rootNamespace": "",
+    "references": ["Linalab.Lux.Editor", "Linalab.UnityAiBridge.Editor"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "defineConstraints": ["LUX_WEBRTC"],
+    "versionDefines": [
+        {
+            "name": "com.unity.webrtc",
+            "expression": "3.0.0",
+            "define": "UNITY_WEBRTC_PRESENT"
+        }
+    ],
+    "autoReferenced": true,
+    "languageVersion": "latest"
+}

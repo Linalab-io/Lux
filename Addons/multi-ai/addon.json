@@ -1,0 +1,12 @@
+{
+  "name": "multi-ai",
+  "displayName": "Multi-AI Terminal",
+  "version": "1.0.0",
+  "description": "Web-based terminal and skill dispatch across multiple AI coding tools.",
+  "category": "ai-tools",
+  "defineSymbols": ["LUX_MULTI_AI"],
+  "requiredPackages": {},
+  "addonDependencies": {},
+  "assemblies": ["Linalab.Lux.MultiAI.Editor"],
+  "keywords": ["ai", "terminal", "tools"]
+}

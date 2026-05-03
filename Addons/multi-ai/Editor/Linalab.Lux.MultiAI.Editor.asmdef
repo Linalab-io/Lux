@@ -1,0 +1,13 @@
+{
+    "name": "Linalab.Lux.MultiAI.Editor",
+    "rootNamespace": "",
+    "references": ["Linalab.Lux.Editor", "Linalab.UnityAiBridge.Editor"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "defineConstraints": ["LUX_MULTI_AI"],
+    "autoReferenced": true,
+    "languageVersion": "latest"
+}

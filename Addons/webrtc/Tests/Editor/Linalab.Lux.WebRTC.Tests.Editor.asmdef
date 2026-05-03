@@ -1,0 +1,13 @@
+{
+    "name": "Linalab.Lux.WebRTC.Tests.Editor",
+    "rootNamespace": "",
+    "references": ["Linalab.Lux.WebRTC.Editor", "Linalab.Lux.Editor", "UnityEngine.TestRunner", "UnityEditor.TestRunner"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "defineConstraints": ["LUX_WEBRTC"],
+    "autoReferenced": false,
+    "languageVersion": "latest"
+}

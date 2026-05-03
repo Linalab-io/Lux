@@ -1,0 +1,23 @@
+{
+  "name": "Linalab.Lux.MultiAI.Tests.Editor",
+  "rootNamespace": "Linalab.LuxEditor.Tests",
+  "references": [
+    "nunit.framework",
+    "Linalab.Lux.MultiAI.Editor",
+    "Linalab.UnityAiBridge.Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": ["LUX_MULTI_AI"],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

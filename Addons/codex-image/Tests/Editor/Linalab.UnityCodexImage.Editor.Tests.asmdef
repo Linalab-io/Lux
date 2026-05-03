@@ -1,0 +1,24 @@
+{
+  "name": "Linalab.UnityCodexImage.Editor.Tests",
+  "rootNamespace": "Linalab.UnityCodexImage.Editor.Tests",
+  "references": [
+    "nunit.framework",
+    "Linalab.UnityCodexImage.Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "LUX_CODEX_IMAGE"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

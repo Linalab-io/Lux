@@ -1,0 +1,23 @@
+{
+  "name": "Linalab.UnityGit.Editor.Tests",
+  "rootNamespace": "Linalab.UnityGit.Editor.Tests",
+  "references": [
+    "Linalab.UnityGit.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "LUX_UNITY_GIT"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

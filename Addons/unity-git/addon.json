@@ -1,0 +1,12 @@
+{
+  "name": "unity-git",
+  "displayName": "Unity Git Integration",
+  "version": "1.0.0",
+  "description": "Unity Editor Git status, staging, diff, and history tools.",
+  "category": "version-control",
+  "defineSymbols": ["LUX_UNITY_GIT"],
+  "requiredPackages": {},
+  "addonDependencies": {},
+  "assemblies": ["Linalab.UnityGit.Editor"],
+  "keywords": ["git", "version-control"]
+}
