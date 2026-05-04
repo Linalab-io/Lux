@@ -304,9 +304,18 @@ namespace Linalab.Lux.Editor
             {
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
                 success = !EditorUtility.scriptCompilationFailed;
+                errorCount = CountCompilerErrors();
+                if (errorCount > 0)
+                {
+                    success = false;
+                }
+                else if (!success)
+                {
+                    UnityEngine.Debug.LogWarning("LuxAutomationGateway: scriptCompilationFailed is true but no compiler errors found in console logs.");
+                }
                 message = success
                     ? "Compilation succeeded."
-                    : "Script compilation failed. Check Unity console for errors.";
+                    : $"Script compilation failed with {errorCount} error(s). Check Unity console for details.";
             }
             catch (Exception exception)
             {
@@ -326,6 +335,25 @@ namespace Linalab.Lux.Editor
                         timestamp_utc = DateTime.UtcNow.ToString("O")
                     }
                 });
+        }
+
+        static int CountCompilerErrors()
+        {
+            var count = 0;
+            foreach (var log in LuxUnityContext.GetRecentLogsSnapshot())
+            {
+                if (!string.Equals(log.Type, "Error", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (LuxCompileEventBroadcaster.CompilerErrorPattern.Match(log.Message).Success
+                    || LuxCompileEventBroadcaster.CompilerErrorPattern.Match(log.StackTrace).Success)
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         static UnityAiBridgeProtocolResponse RunLuxTests(UnityAiBridgeProtocolRequest request)

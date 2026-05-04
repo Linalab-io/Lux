@@ -3887,7 +3887,7 @@ fn run_batch_compile(args: CompileArgs) -> anyhow::Result<()> {
         }
 
         // Fallback: use execute-dynamic-code to compile in live Editor
-        let compile_code = "UnityEditor.AssetDatabase.Refresh(UnityEditor.ImportAssetOptions.ForceUpdate); var ok = !UnityEditor.EditorUtility.scriptCompilationFailed; return new { ok, error_count = 0, message = ok ? \"Compilation succeeded.\" : \"Script compilation failed. Check Unity console for errors.\", timestamp_utc = System.DateTime.UtcNow.ToString(\"O\") };";
+        let compile_code = "UnityEngine.Debug.Log(\"LUX compile fallback: counting errors from console\"); UnityEditor.AssetDatabase.Refresh(UnityEditor.ImportAssetOptions.ForceUpdate); var errorCount = 0; foreach (var log in Linalab.Lux.Editor.LuxUnityContext.GetRecentLogsSnapshot()) { if (string.Equals(log.Type, \"Error\", System.StringComparison.OrdinalIgnoreCase)) { errorCount++; } } var ok = !UnityEditor.EditorUtility.scriptCompilationFailed && errorCount == 0; return new { ok, error_count = errorCount, message = ok ? \"Compilation succeeded.\" : $\"Script compilation failed with {errorCount} error(s).\", timestamp_utc = System.DateTime.UtcNow.ToString(\"O\") };";
         let dynamic_request = json!({
             "schemaVersion": 1,
             "requestId": uuid::Uuid::new_v4().to_string(),
