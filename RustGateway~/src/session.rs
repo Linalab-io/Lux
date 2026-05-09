@@ -118,6 +118,8 @@ pub fn start_session(project_root: &Path) -> Result<(SessionId, PathBuf)> {
             max_age_days: None,
             max_lines: Some(10_000),
             policy: Some("session-default".to_string()),
+            created_at: None,
+            expires_at: None,
         }),
     };
 

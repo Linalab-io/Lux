@@ -74,6 +74,11 @@ impl Default for RetentionPolicy {
 }
 
 pub fn resolve_log_path(project_root: impl AsRef<Path>) -> PathBuf {
+    if let Ok(override_path) = std::env::var("LUX_EVENT_LOG_PATH") {
+        if !override_path.is_empty() {
+            return PathBuf::from(override_path);
+        }
+    }
     cross_platform::join_forward(project_root.as_ref(), &LOG_RELATIVE_PATH)
 }
 

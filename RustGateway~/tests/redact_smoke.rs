@@ -349,6 +349,7 @@ fn metadata_serde_roundtrips() {
     let original = RedactionMetadata {
         redacted_fields: vec!["summary".to_string(), "payload.token".to_string()],
         redaction_classes: vec!["secret".to_string(), "project_path".to_string()],
+        timestamp: None,
     };
     let serialized = serde_json::to_string(&original).expect("serialize");
     let deserialized: RedactionMetadata =

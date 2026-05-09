@@ -880,7 +880,7 @@ async fn execute_tool_command(
         schema_version: PROTOCOL_VERSION,
         event_id: Uuid::new_v4().to_string(),
         category: crate::protocol::EventCategory::Tool,
-        source: "lux-gateway".to_string(),
+        source: crate::protocol::EventSource::Ai,
         session_id,
         captured_at_utc: now,
         project_path: state
@@ -888,6 +888,7 @@ async fn execute_tool_command(
             .project_root
             .as_ref()
             .map(|path| cross_platform::display_path(path)),
+        summary: None,
         redaction_metadata: None,
         retention_metadata: None,
         payload,
@@ -1116,7 +1117,7 @@ async fn execute_graph(
         schema_version: PROTOCOL_VERSION,
         event_id: Uuid::new_v4().to_string(),
         category: crate::protocol::EventCategory::Tool,
-        source: "lux".to_string(),
+        source: crate::protocol::EventSource::Ai,
         session_id: graph.id.clone(),
         captured_at_utc: chrono_like_now(),
         project_path: state
@@ -1124,6 +1125,7 @@ async fn execute_graph(
             .project_root
             .as_ref()
             .map(|path| path.display().to_string()),
+        summary: None,
         redaction_metadata: None,
         retention_metadata: None,
         payload: serde_json::json!({
@@ -1484,7 +1486,7 @@ async fn handle_socket(state: GatewayState, socket: WebSocket, role: String, cli
         schema_version: PROTOCOL_VERSION,
         event_id: Uuid::new_v4().to_string(),
         category: crate::protocol::EventCategory::Tool,
-        source: "lux".to_string(),
+        source: crate::protocol::EventSource::Ai,
         session_id: client_id.clone(),
         captured_at_utc: chrono_like_now(),
         project_path: state
@@ -1492,6 +1494,7 @@ async fn handle_socket(state: GatewayState, socket: WebSocket, role: String, cli
             .project_root
             .as_ref()
             .map(|path| path.display().to_string()),
+        summary: None,
         redaction_metadata: None,
         retention_metadata: None,
         payload: serde_json::json!({
@@ -2037,10 +2040,11 @@ mod tests {
                     schema_version: PROTOCOL_VERSION,
                     event_id: format!("event-{index}"),
                     category: crate::protocol::EventCategory::Log,
-                    source: "test".to_string(),
+                    source: crate::protocol::EventSource::Runtime,
                     session_id: "test-session".to_string(),
                     captured_at_utc: "test-time".to_string(),
                     project_path: None,
+                    summary: None,
                     redaction_metadata: None,
                     retention_metadata: None,
                     payload: serde_json::json!({ "index": index }),
@@ -2473,7 +2477,7 @@ mod tests {
 
         let broadcast = events.recv().await.unwrap();
         assert_eq!(broadcast.category, crate::protocol::EventCategory::Tool);
-        assert_eq!(broadcast.source, "lux-gateway");
+        assert_eq!(broadcast.source, crate::protocol::EventSource::Ai);
         assert_eq!(broadcast.session_id, session_id);
         assert_eq!(broadcast.payload["kind"], "tool-execute");
         assert_eq!(broadcast.payload["toolType"], "claude-code");
@@ -2549,7 +2553,7 @@ mod tests {
 
         let broadcast = events.recv().await.unwrap();
         assert_eq!(broadcast.category, crate::protocol::EventCategory::Tool);
-        assert_eq!(broadcast.source, "lux-gateway");
+        assert_eq!(broadcast.source, crate::protocol::EventSource::Ai);
         assert_eq!(broadcast.session_id, session_id);
         assert_eq!(broadcast.payload["kind"], "skill-dispatch");
         assert_eq!(broadcast.payload["toolType"], "opencode");
@@ -3041,7 +3045,7 @@ mod tests {
 
         let broadcast = events.recv().await.unwrap();
         assert_eq!(broadcast.category, crate::protocol::EventCategory::Tool);
-        assert_eq!(broadcast.source, "lux");
+        assert_eq!(broadcast.source, crate::protocol::EventSource::Ai);
         assert_eq!(broadcast.payload["kind"], "execute-graph");
         let graph_nodes = broadcast.payload["graph"]["nodes"].as_array().unwrap();
         assert_eq!(graph_nodes.len(), 3);
