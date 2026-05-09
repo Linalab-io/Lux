@@ -237,7 +237,7 @@ namespace Linalab.Lux.Editor
 
             var raycastResults = RaycastUi(eventSystem, position, out var pointerEventData);
             var target = raycastResults.Count == 0 ? null : raycastResults[0].gameObject;
-            if ((action == "click" || action == "long-press" || action == "drag-start") && target == null)
+            if ((action == "click" || action == "long-press" || action == "drag" || action == "drag-start") && target == null)
             {
                 return UnityAiBridgeProtocol.CreateErrorResponse(
                     request.requestId,
@@ -286,6 +286,28 @@ namespace Linalab.Lux.Editor
                     ExecutePointerDown(pointerEventData, target);
                     Thread.Sleep(Math.Max(durationMs, 500));
                     ExecutePointerUp(pointerEventData, target);
+                    return;
+
+                case "drag":
+                    ActiveMouseUiDragEvent = pointerEventData;
+                    ActiveMouseUiDragTarget = target;
+                    ActiveMouseUiDragStarted = false;
+                    ExecutePointerDown(ActiveMouseUiDragEvent, ActiveMouseUiDragTarget);
+                    ExecuteEvents.Execute(ActiveMouseUiDragTarget, ActiveMouseUiDragEvent, ExecuteEvents.initializePotentialDrag);
+                    ExecuteEvents.Execute(ActiveMouseUiDragTarget, ActiveMouseUiDragEvent, ExecuteEvents.beginDragHandler);
+                    ActiveMouseUiDragStarted = true;
+                    Thread.Sleep(Math.Max(durationMs, 0));
+                    UpdateActiveMouseUiDrag(pointerEventData.position, raycastResults);
+                    ExecuteEvents.Execute(ActiveMouseUiDragTarget, ActiveMouseUiDragEvent, ExecuteEvents.dragHandler);
+                    if (target != null)
+                    {
+                        ExecuteEvents.Execute(target, ActiveMouseUiDragEvent, ExecuteEvents.dropHandler);
+                    }
+                    ExecutePointerUp(ActiveMouseUiDragEvent, ActiveMouseUiDragTarget);
+                    ExecuteEvents.Execute(ActiveMouseUiDragTarget, ActiveMouseUiDragEvent, ExecuteEvents.endDragHandler);
+                    ActiveMouseUiDragEvent = null;
+                    ActiveMouseUiDragTarget = null;
+                    ActiveMouseUiDragStarted = false;
                     return;
 
                 case "drag-start":

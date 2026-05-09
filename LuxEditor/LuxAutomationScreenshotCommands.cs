@@ -141,14 +141,14 @@ namespace Linalab.Lux.Editor
                         continue;
                     }
 
-                    CollectVisualElement(document.rootVisualElement, document.name, string.Empty, elements);
+                    CollectVisualElement(document.rootVisualElement, document.name, string.Empty, (int)document.sortingOrder, -1, elements);
                 }
             }
 
             return elements.ToArray();
         }
 
-        static void CollectVisualElement(VisualElement element, string documentName, string parentPath, List<UnityAiBridgeScreenshotElement> results)
+        static void CollectVisualElement(VisualElement element, string documentName, string parentPath, int sortingOrder, int siblingIndex, List<UnityAiBridgeScreenshotElement> results)
         {
             if (element == null)
             {
@@ -158,11 +158,18 @@ namespace Linalab.Lux.Editor
             var segment = string.IsNullOrEmpty(element.name) ? element.GetType().Name : element.name;
             var path = string.IsNullOrEmpty(parentPath) ? segment : parentPath + "/" + segment;
             var bounds = element.worldBound;
+            var typeName = element.GetType().FullName ?? element.GetType().Name;
+            var elementType = element.GetType().Name;
+            var label = string.IsNullOrEmpty(element.name) ? elementType : element.name;
+            const float resolutionScale = 1f;
+            const float yOffset = 0f;
             results.Add(new UnityAiBridgeScreenshotElement
             {
                 documentName = documentName ?? string.Empty,
+                label = label,
                 name = element.name ?? string.Empty,
-                typeName = element.GetType().FullName ?? element.GetType().Name,
+                type = elementType,
+                typeName = typeName,
                 path = path,
                 x = bounds.x,
                 y = bounds.y,
@@ -171,14 +178,34 @@ namespace Linalab.Lux.Editor
                 visible = element.visible && element.resolvedStyle.display != DisplayStyle.None,
                 enabled = element.enabledInHierarchy,
                 pickingMode = element.pickingMode.ToString(),
+                interaction = ResolveElementInteraction(element),
                 simX = bounds.center.x,
-                simY = bounds.center.y
+                simY = bounds.center.y,
+                boundsMinX = bounds.xMin,
+                boundsMaxX = bounds.xMax,
+                boundsMinY = bounds.yMin,
+                boundsMaxY = bounds.yMax,
+                sortingOrder = sortingOrder,
+                siblingIndex = siblingIndex,
+                coordinateSystem = "gameView",
+                resolutionScale = resolutionScale,
+                yOffset = yOffset
             });
 
             for (int i = 0; i < element.hierarchy.childCount; i++)
             {
-                CollectVisualElement(element.hierarchy.ElementAt(i), documentName, path, results);
+                CollectVisualElement(element.hierarchy.ElementAt(i), documentName, path, sortingOrder, i, results);
             }
+        }
+
+        static string ResolveElementInteraction(VisualElement element)
+        {
+            if (element == null || !element.enabledInHierarchy || element.pickingMode == PickingMode.Ignore)
+            {
+                return "none";
+            }
+
+            return element.visible && element.resolvedStyle.display != DisplayStyle.None ? "clickable" : "none";
         }
 
         static string CreateSafeRequestId(string requestId)

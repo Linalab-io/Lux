@@ -1344,7 +1344,9 @@ namespace Linalab.UnityAiBridge.Editor
 
             builder.Append('{');
             AppendJsonProperty(builder, "documentName", element.documentName, false);
+            AppendJsonProperty(builder, "label", element.label, true);
             AppendJsonProperty(builder, "name", element.name, true);
+            AppendJsonProperty(builder, "type", element.type, true);
             AppendJsonProperty(builder, "typeName", element.typeName, true);
             AppendJsonProperty(builder, "path", element.path, true);
             AppendJsonProperty(builder, "x", element.x, true);
@@ -1354,8 +1356,18 @@ namespace Linalab.UnityAiBridge.Editor
             AppendJsonProperty(builder, "visible", element.visible, true);
             AppendJsonProperty(builder, "enabled", element.enabled, true);
             AppendJsonProperty(builder, "pickingMode", element.pickingMode, true);
+            AppendJsonProperty(builder, "interaction", element.interaction, true);
             AppendJsonProperty(builder, "simX", element.simX, true);
             AppendJsonProperty(builder, "simY", element.simY, true);
+            AppendJsonProperty(builder, "boundsMinX", element.boundsMinX, true);
+            AppendJsonProperty(builder, "boundsMaxX", element.boundsMaxX, true);
+            AppendJsonProperty(builder, "boundsMinY", element.boundsMinY, true);
+            AppendJsonProperty(builder, "boundsMaxY", element.boundsMaxY, true);
+            AppendJsonProperty(builder, "sortingOrder", element.sortingOrder, true);
+            AppendJsonProperty(builder, "siblingIndex", element.siblingIndex, true);
+            AppendJsonProperty(builder, "coordinateSystem", element.coordinateSystem, true);
+            AppendJsonProperty(builder, "resolutionScale", element.resolutionScale, true);
+            AppendJsonProperty(builder, "yOffset", element.yOffset, true);
             builder.Append('}');
         }
 

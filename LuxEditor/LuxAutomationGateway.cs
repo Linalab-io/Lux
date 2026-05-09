@@ -189,6 +189,8 @@ namespace Linalab.Lux.Editor
         public const string CommandRecordLuxInput = "record_lux_input";
         public const string CommandReplayLuxInput = "replay_lux_input";
         public const string CommandExecuteLuxDynamicCode = "execute_lux_dynamic_code";
+        public const string CommandCompileLuxProject = "compile_lux_project";
+        public const string CommandRunLuxTests = "run_lux_tests";
 
         static readonly LuxAutomationGateway AutomationGateway = new LuxAutomationGateway();
         static PointerEventData ActiveMouseUiDragEvent;
@@ -227,6 +229,8 @@ namespace Linalab.Lux.Editor
             RegisterOrReplace(CommandRecordLuxInput, RecordInput);
             RegisterOrReplace(CommandReplayLuxInput, ReplayInput);
             RegisterOrReplace(CommandExecuteLuxDynamicCode, ExecuteDynamicCode);
+            RegisterOrReplace(CommandCompileLuxProject, CompileLuxProject);
+            RegisterOrReplace(CommandRunLuxTests, RunLuxTests);
             UnityAiBridgeProtocol.MarkRegistryReady(reason);
             UnityAiBridgeProtocol.LogRegisteredCommands(reason);
         }
@@ -395,10 +399,23 @@ namespace Linalab.Lux.Editor
             }
             catch (Exception exception)
             {
+                var parts = new System.Text.StringBuilder(exception.Message);
+                var inner = exception.InnerException;
+                var depth = 0;
+                while (inner != null && depth < 5)
+                {
+                    parts.Append($"\nInner[{depth}]: {inner.Message}");
+                    if (!string.IsNullOrEmpty(inner.StackTrace))
+                        parts.Append($"\nStack[{depth}]: {inner.StackTrace}");
+                    inner = inner.InnerException;
+                    depth++;
+                }
+                if (!string.IsNullOrEmpty(exception.StackTrace))
+                    parts.Append($"\nOuterStack: {exception.StackTrace}");
                 return UnityAiBridgeProtocol.CreateErrorResponse(
                     request.requestId,
                     UnityAiBridgeProtocol.ErrorCodeInvalidParams,
-                    $"Failed to start Unity Test Runner: {exception.Message}");
+                    $"Failed to start Unity Test Runner: {parts}");
             }
         }
 
@@ -419,10 +436,9 @@ namespace Linalab.Lux.Editor
             var filter = Activator.CreateInstance(filterType);
             var testMode = Enum.Parse(testModeType, normalizedPlatform);
             filterType.GetField("testMode")?.SetValue(filter, testMode);
-            filterType.GetProperty("testMode")?.SetValue(filter, testMode, null);
 
             var settings = CreateLuxTestExecutionSettings(settingsType, filterType, filter);
-            var api = Activator.CreateInstance(apiType);
+            var api = ScriptableObject.CreateInstance(apiType);
             var executeMethod = apiType.GetMethod("Execute", new[] { settingsType });
             if (executeMethod == null)
             {

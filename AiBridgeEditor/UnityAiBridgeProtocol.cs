@@ -523,7 +523,9 @@ namespace Linalab.UnityAiBridge.Editor
     public sealed class UnityAiBridgeScreenshotElement
     {
         public string documentName;
+        public string label;
         public string name;
+        public string type;
         public string typeName;
         public string path;
         public float x;
@@ -533,8 +535,18 @@ namespace Linalab.UnityAiBridge.Editor
         public bool visible;
         public bool enabled;
         public string pickingMode;
+        public string interaction;
         public float simX;
         public float simY;
+        public float boundsMinX;
+        public float boundsMaxX;
+        public float boundsMinY;
+        public float boundsMaxY;
+        public int sortingOrder;
+        public int siblingIndex;
+        public string coordinateSystem;
+        public float resolutionScale;
+        public float yOffset;
     }
 
     [Serializable]
