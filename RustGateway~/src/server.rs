@@ -3031,7 +3031,13 @@ mod tests {
         assert_eq!(executed.status(), StatusCode::ACCEPTED);
         let exec_json = response_json(executed).await;
         assert_eq!(exec_json["payload"]["kind"], "execute-graph");
-        assert_eq!(exec_json["payload"]["graph"]["nodes"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            exec_json["payload"]["graph"]["nodes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
 
         let broadcast = events.recv().await.unwrap();
         assert_eq!(broadcast.category, crate::protocol::EventCategory::Tool);
@@ -3092,23 +3098,16 @@ mod tests {
         assert_eq!(broadcast.payload["toolType"], "claude-code");
         assert_eq!(broadcast.payload["command"], "test-command");
 
-        let fetched = authenticated_get(
-            app.clone(),
-            &format!("/api/tools/sessions/{}", session_id),
-        )
-        .await;
+        let fetched =
+            authenticated_get(app.clone(), &format!("/api/tools/sessions/{}", session_id)).await;
         let session_data = response_json(fetched).await;
         assert_eq!(session_data["commandHistory"].as_array().unwrap().len(), 1);
 
-        let deleted = delete_request(
-            app.clone(),
-            &format!("/api/tools/sessions/{}", session_id),
-        )
-        .await;
+        let deleted =
+            delete_request(app.clone(), &format!("/api/tools/sessions/{}", session_id)).await;
         assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
 
-        let missing =
-            authenticated_get(app, &format!("/api/tools/sessions/{}", session_id)).await;
+        let missing = authenticated_get(app, &format!("/api/tools/sessions/{}", session_id)).await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
@@ -3216,11 +3215,8 @@ mod tests {
             .await
             .set_visibility(addon_id, crate::addon_auth::RepoVisibility::Public);
 
-        let vis = authenticated_get(
-            app.clone(),
-            &format!("/api/addons/{}/visibility", addon_id),
-        )
-        .await;
+        let vis =
+            authenticated_get(app.clone(), &format!("/api/addons/{}/visibility", addon_id)).await;
         assert_eq!(vis.status(), StatusCode::OK);
         let vis_json = response_json(vis).await;
         assert_eq!(vis_json["visibility"], "public");
@@ -3252,22 +3248,17 @@ mod tests {
         ];
 
         let token = crate::addon_auth::issue_addon_token(gateway_token, &repos).unwrap();
-        let verified =
-            crate::addon_auth::verify_addon_token(gateway_token, &token).unwrap();
+        let verified = crate::addon_auth::verify_addon_token(gateway_token, &token).unwrap();
         assert_eq!(verified.repos, repos);
 
-        let wrong_key_result =
-            crate::addon_auth::verify_addon_token("wrong-key", &token);
+        let wrong_key_result = crate::addon_auth::verify_addon_token("wrong-key", &token);
         assert!(wrong_key_result.is_err());
 
         let expired =
             crate::addon_auth::issue_addon_token_with_ttl(gateway_token, &repos, 0).unwrap();
         let expired_result = crate::addon_auth::verify_addon_token(gateway_token, &expired);
         assert!(expired_result.is_err());
-        assert!(expired_result
-            .unwrap_err()
-            .to_string()
-            .contains("expired"));
+        assert!(expired_result.unwrap_err().to_string().contains("expired"));
     }
 
     #[tokio::test]

@@ -60,10 +60,7 @@ impl AddonStore {
     }
 
     pub fn get_by_name(&self, name: &str) -> Option<AddonEntry> {
-        self.addons
-            .values()
-            .find(|a| a.name == name)
-            .cloned()
+        self.addons.values().find(|a| a.name == name).cloned()
     }
 
     pub fn update_auth_status(&mut self, id: &str, status: String, accessible: bool) -> bool {
@@ -210,10 +207,7 @@ mod tests {
 
     #[test]
     fn test_discover_linalab_packages() {
-        let dir = std::env::temp_dir().join(format!(
-            "lux-discover-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("lux-discover-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("com.linalab.lux")).unwrap();
         std::fs::create_dir_all(dir.join("com.linalab.unity-log")).unwrap();
         std::fs::create_dir_all(dir.join("com.other.package")).unwrap();

@@ -1,13 +1,13 @@
 pub mod addon_auth;
 pub mod addon_routes;
 pub mod addon_store;
-pub mod unity_launch;
 pub mod ai_log;
 pub mod cross_platform;
 mod mcp;
 mod protocol;
 mod server;
 pub mod session;
+pub mod unity_launch;
 pub mod visual_regression;
 
 use std::{
@@ -396,6 +396,10 @@ struct UnityFocusWindowArgs {
 struct UnityLaunchArgs {
     #[arg(long)]
     project_path: Option<PathBuf>,
+    #[arg(long)]
+    unity_path: Option<PathBuf>,
+    #[arg(long, default_value_t = 120)]
+    timeout_seconds: u64,
     #[arg(long, default_value_t = false)]
     no_wait: bool,
 }
@@ -576,6 +580,7 @@ enum KeyboardInputAction {
 enum MouseUiAction {
     Click,
     LongPress,
+    Drag,
     DragStart,
     DragMove,
     DragEnd,
@@ -586,6 +591,7 @@ impl MouseUiAction {
         match self {
             MouseUiAction::Click => "click",
             MouseUiAction::LongPress => "long-press",
+            MouseUiAction::Drag => "drag",
             MouseUiAction::DragStart => "drag-start",
             MouseUiAction::DragMove => "drag-move",
             MouseUiAction::DragEnd => "drag-end",
@@ -751,6 +757,14 @@ struct UnityBridgeDiscovery {
     host: String,
     port: u16,
     token: String,
+}
+
+#[derive(Debug)]
+pub struct UnityBridgeBackendPing {
+    pub host: String,
+    pub port: u16,
+    pub discovery_path: PathBuf,
+    pub ping: Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -2245,15 +2259,46 @@ fn run_lux_create_objects(args: UnityCreateObjectsArgs) -> anyhow::Result<()> {
 }
 
 fn run_lux_unity_launch(args: UnityLaunchArgs) -> anyhow::Result<()> {
+    let started = Instant::now();
     let project_root = resolve_project_root(&args.project_path)?;
-    let launch_target = resolve_unity_launch_target(&project_root)?;
+    let discovery_path = project_root.join("Library/UnityAiBridge/server.json");
+
+    if let Ok(backend) = try_ping_unity_bridge_backend(&project_root, Duration::from_secs(1)) {
+        eprintln!(
+            "Lux launch: Unity editor already has a reachable Lux backend for {}; skipping launch",
+            project_root.display()
+        );
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "pid": null,
+                "status": "already_running",
+                "discoveryPath": backend.discovery_path.to_string_lossy(),
+                "bridgeReady": true,
+                "host": backend.host,
+                "port": backend.port,
+                "ping": backend.ping,
+                "elapsedSeconds": started.elapsed().as_secs_f64(),
+                "projectPath": project_root.to_string_lossy(),
+            }))?
+        );
+        return Ok(());
+    }
+
+    let launch_target = match args.unity_path {
+        Some(path) => UnityLaunchTarget {
+            executable: path,
+            prefix_args: Vec::new(),
+        },
+        None => resolve_unity_launch_target(&project_root)?,
+    };
 
     eprintln!(
         "Lux launch: launching Unity editor for {}",
         project_root.display()
     );
 
-    ProcessCommand::new(&launch_target.executable)
+    let child = ProcessCommand::new(&launch_target.executable)
         .args(&launch_target.prefix_args)
         .arg("-projectPath")
         .arg(&project_root)
@@ -2267,12 +2312,26 @@ fn run_lux_unity_launch(args: UnityLaunchArgs) -> anyhow::Result<()> {
                 launch_target.executable.display()
             )
         })?;
+    let pid = child.id();
 
-    if args.no_wait {
-        return Ok(());
+    let mut bridge_ready = false;
+    if !args.no_wait {
+        wait_for_unity_bridge_ready(&project_root, Duration::from_secs(args.timeout_seconds))?;
+        bridge_ready = true;
     }
 
-    wait_for_unity_bridge_ready(&project_root, Duration::from_secs(60))
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "pid": pid,
+            "discoveryPath": discovery_path.to_string_lossy(),
+            "bridgeReady": bridge_ready,
+            "elapsedSeconds": started.elapsed().as_secs_f64(),
+            "projectPath": project_root.to_string_lossy(),
+        }))?
+    );
+
+    Ok(())
 }
 
 fn print_lux_backend_find_game_objects(args: UnityFindGameObjectsArgs) -> anyhow::Result<()> {
@@ -2284,15 +2343,15 @@ fn print_lux_backend_find_game_objects(args: UnityFindGameObjectsArgs) -> anyhow
         "command": "find_lux_game_objects",
         "token": discovery.token,
         "params": {
-            "searchMode": args.search_mode,
-            "name": args.name,
-            "regex": args.regex,
-            "path": args.path,
-            "component": args.component,
-            "tag": args.tag,
-            "layer": args.layer,
-            "activeState": args.active_state,
-            "inlineLimit": args.inline_limit,
+            "findGameObjectsSearchMode": args.search_mode,
+            "findGameObjectsName": args.name,
+            "findGameObjectsRegex": args.regex,
+            "findGameObjectsPath": args.path,
+            "findGameObjectsComponent": args.component,
+            "findGameObjectsTag": args.tag,
+            "findGameObjectsLayer": args.layer,
+            "findGameObjectsActiveState": args.active_state,
+            "findGameObjectsInlineLimit": args.inline_limit,
         }
     });
     let response_line = send_unity_tcp_line(
@@ -2911,44 +2970,18 @@ fn play_mode_state_matches(state: &Value, action: &str) -> bool {
 fn print_lux_backend_status(args: UnityBackendStatusArgs) -> anyhow::Result<()> {
     let project_root = resolve_project_root(&args.project_path)?;
     let discovery_path = project_root.join("Library/UnityAiBridge/server.json");
-    let discovery = match read_unity_bridge_discovery(&project_root) {
-        Ok(discovery) => discovery,
-        Err(error) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "ok": false,
-                    "running": false,
-                    "discovery_path": discovery_path,
-                    "message": error.to_string(),
-                }))?
-            );
-            return Ok(());
-        }
-    };
-
-    let ping = json!({
-        "schemaVersion": 1,
-        "requestId": uuid::Uuid::new_v4().to_string(),
-        "command": "ping",
-        "token": discovery.token,
-        "params": {}
-    });
-    let ping_result =
-        send_unity_tcp_line(&discovery, &format!("{}\n", serde_json::to_string(&ping)?));
+    let ping_result = try_ping_unity_bridge_backend(&project_root, Duration::from_secs(10));
     match ping_result {
-        Ok(response_line) => {
-            let response_json: Value = serde_json::from_str(&response_line)
-                .unwrap_or_else(|_| json!({ "raw": response_line }));
+        Ok(backend) => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
                     "ok": true,
                     "running": true,
-                    "host": discovery.host,
-                    "port": discovery.port,
-                    "discovery_path": discovery_path,
-                    "ping": response_json,
+                    "host": backend.host,
+                    "port": backend.port,
+                    "discovery_path": backend.discovery_path,
+                    "ping": backend.ping,
                 }))?
             );
         }
@@ -2958,8 +2991,6 @@ fn print_lux_backend_status(args: UnityBackendStatusArgs) -> anyhow::Result<()> 
                 serde_json::to_string_pretty(&json!({
                     "ok": false,
                     "running": false,
-                    "host": discovery.host,
-                    "port": discovery.port,
                     "discovery_path": discovery_path,
                     "message": error.to_string(),
                 }))?
@@ -3099,35 +3130,122 @@ fn clear_lux_backend_clear_console(args: UnityClearConsoleArgs) -> anyhow::Resul
 
 fn print_lux_backend_focus_window(args: UnityFocusWindowArgs) -> anyhow::Result<()> {
     let project_root = resolve_project_root(&args.project_path)?;
-    let response_json = fetch_lux_backend_command_response(&project_root, "focus_lux_window")?;
-    let payload = response_json
-        .get("payload")
-        .and_then(|payload| payload.get("focusWindowResult"))
-        .context("Unity TCP response did not include payload.focusWindowResult")?;
+    let process_match = collect_unity_process_match_info();
+    match fetch_lux_backend_command_response(&project_root, "focus_lux_window") {
+        Ok(response_json) => {
+            let payload = response_json
+                .get("payload")
+                .and_then(|payload| payload.get("focusWindowResult"))
+                .context("Unity TCP response did not include payload.focusWindowResult")?;
 
-    let schema_version = response_json
-        .get("schemaVersion")
-        .and_then(Value::as_u64)
-        .context("Unity TCP response did not include schemaVersion")?;
-    let captured_at_utc = response_json
-        .get("capturedAtUtc")
-        .and_then(Value::as_str)
-        .context("Unity TCP response did not include capturedAtUtc")?;
-    let focused = payload
-        .get("focused")
-        .and_then(Value::as_bool)
-        .context("Unity TCP response did not include payload.focusWindowResult.focused")?;
+            let schema_version = response_json
+                .get("schemaVersion")
+                .and_then(Value::as_u64)
+                .context("Unity TCP response did not include schemaVersion")?;
+            let captured_at_utc = response_json
+                .get("capturedAtUtc")
+                .and_then(Value::as_str)
+                .context("Unity TCP response did not include capturedAtUtc")?;
+            let focused = payload
+                .get("focused")
+                .and_then(Value::as_bool)
+                .context("Unity TCP response did not include payload.focusWindowResult.focused")?;
+
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "schemaVersion": schema_version,
+                    "capturedAtUtc": captured_at_utc,
+                    "platform": std::env::consts::OS,
+                    "attemptedMethod": "unity-backend",
+                    "success": focused,
+                    "processMatch": process_match,
+                    "focused": focused,
+                }))?
+            );
+
+            Ok(())
+        }
+        Err(backend_error) => run_focus_window_os_helper(process_match, backend_error),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_focus_window_os_helper(
+    process_match: Value,
+    backend_error: anyhow::Error,
+) -> anyhow::Result<()> {
+    let output = ProcessCommand::new("osascript")
+        .args(["-e", "tell application \"Unity\" to activate"])
+        .output()
+        .with_context(|| {
+            format!("Unity backend focus failed ({backend_error}); failed to run macOS osascript")
+        })?;
+
+    if !output.status.success() {
+        bail!(
+            "Unity backend focus failed ({}); macOS osascript focus failed with status {}: {}",
+            backend_error,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "schemaVersion": schema_version,
-            "capturedAtUtc": captured_at_utc,
-            "focused": focused,
+            "platform": std::env::consts::OS,
+            "attemptedMethod": "macos-osascript",
+            "success": true,
+            "processMatch": process_match,
+            "backendAttempted": true,
+            "backendError": backend_error.to_string(),
         }))?
     );
 
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_focus_window_os_helper(
+    _process_match: Value,
+    backend_error: anyhow::Error,
+) -> anyhow::Result<()> {
+    Err(backend_error)
+}
+
+fn collect_unity_process_match_info() -> Value {
+    #[cfg(target_os = "macos")]
+    {
+        match ProcessCommand::new("pgrep").args(["-x", "Unity"]).output() {
+            Ok(output) => {
+                let pids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+                json!({
+                    "matcher": "pgrep -x Unity",
+                    "matched": !pids.is_empty(),
+                    "pids": pids,
+                })
+            }
+            Err(error) => json!({
+                "matcher": "pgrep -x Unity",
+                "matched": false,
+                "error": error.to_string(),
+            }),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        json!({
+            "matcher": "not-available",
+            "matched": false,
+        })
+    }
 }
 
 fn fetch_lux_backend_protocol_info(project_root: &Path) -> anyhow::Result<Value> {
@@ -3349,6 +3467,45 @@ fn read_unity_bridge_discovery(project_root: &Path) -> anyhow::Result<UnityBridg
             "failed to parse Unity AI Bridge discovery file at {}",
             discovery_path.display()
         )
+    })
+}
+
+pub fn try_ping_unity_bridge_backend(
+    project_root: &Path,
+    timeout: Duration,
+) -> anyhow::Result<UnityBridgeBackendPing> {
+    let discovery_path = project_root.join("Library/UnityAiBridge/server.json");
+    let discovery = read_unity_bridge_discovery(project_root)?;
+    let ping = json!({
+        "schemaVersion": 1,
+        "requestId": uuid::Uuid::new_v4().to_string(),
+        "command": "ping",
+        "token": discovery.token,
+        "params": {}
+    });
+    let response_line = send_unity_tcp_line_with_timeout(
+        &discovery,
+        &format!("{}\n", serde_json::to_string(&ping)?),
+        timeout,
+    )?;
+    let response_json: Value =
+        serde_json::from_str(&response_line).context("Unity TCP response was not valid JSON")?;
+    if response_json.get("ok").and_then(Value::as_bool) != Some(true)
+        || response_json
+            .get("payload")
+            .and_then(|payload| payload.get("ping"))
+            .and_then(|ping| ping.get("status"))
+            .and_then(Value::as_str)
+            != Some("ok")
+    {
+        bail!("Unity TCP ping was not ready: {}", response_json);
+    }
+
+    Ok(UnityBridgeBackendPing {
+        host: discovery.host,
+        port: discovery.port,
+        discovery_path,
+        ping: response_json,
     })
 }
 
@@ -3689,73 +3846,20 @@ fn run_batch_compile(args: CompileArgs) -> anyhow::Result<()> {
             Ok(response) => {
                 let response_json: Value = serde_json::from_str(&response)
                     .context("compile TCP response was not valid JSON")?;
-                // If command is registered, use its result
-                if response_json.get("errorCode").and_then(Value::as_str) != Some("unknown_command")
+                if response_json.get("errorCode").and_then(Value::as_str) == Some("unknown_command")
                 {
-                    let compile_ok = response_json.get("ok").and_then(Value::as_bool) == Some(true);
-                    if let Some(payload) = response_json
-                        .get("payload")
-                        .and_then(|payload| payload.get("compileResult"))
-                    {
-                        println!("{}", serde_json::to_string_pretty(payload)?);
-                        if payload.get("ok").and_then(Value::as_bool) != Some(true) {
-                            std::process::exit(1);
-                        }
-                    } else {
-                        println!("{}", serde_json::to_string_pretty(&response_json)?);
-                    }
-                    if !compile_ok {
-                        std::process::exit(1);
-                    }
-                    return Ok(());
+                    bail!(
+                        "compile_lux_project is not registered in Unity AI Bridge. Ensure Lux editor scripts are compiled."
+                    );
                 }
-                // compile_lux_project not registered — fall through to dynamic code
-                eprintln!(
-                    "compile_lux_project not registered, trying execute-dynamic-code fallback..."
-                );
-            }
-            Err(error) => {
-                eprintln!("Live Unity Editor compile failed to connect, falling back to batch mode: {error}");
-            }
-        }
 
-        // Fallback: use execute-dynamic-code to compile in live Editor
-        let compile_code = "UnityEngine.Debug.Log(\"LUX compile fallback: counting errors from console\"); UnityEditor.AssetDatabase.Refresh(UnityEditor.ImportAssetOptions.ForceUpdate); var errorCount = 0; foreach (var log in Linalab.Lux.Editor.LuxUnityContext.GetRecentLogsSnapshot()) { if (string.Equals(log.Type, \"Error\", System.StringComparison.OrdinalIgnoreCase)) { errorCount++; } } var ok = !UnityEditor.EditorUtility.scriptCompilationFailed && errorCount == 0; return new { ok, error_count = errorCount, message = ok ? \"Compilation succeeded.\" : $\"Script compilation failed with {errorCount} error(s).\", timestamp_utc = System.DateTime.UtcNow.ToString(\"O\") };";
-        let dynamic_request = json!({
-            "schemaVersion": 1,
-            "requestId": uuid::Uuid::new_v4().to_string(),
-            "command": "execute_lux_dynamic_code",
-            "token": discovery.token,
-            "params": { "dynamicCode": compile_code }
-        });
-        match send_unity_tcp_line(
-            &discovery,
-            &format!("{}\n", serde_json::to_string(&dynamic_request)?),
-        ) {
-            Ok(response) => {
-                let response_json: Value = serde_json::from_str(&response)
-                    .context("dynamic code compile response was not valid JSON")?;
                 let compile_ok = response_json.get("ok").and_then(Value::as_bool) == Some(true);
                 if let Some(payload) = response_json
                     .get("payload")
-                    .and_then(|p| p.get("dynamicCodeResult"))
+                    .and_then(|payload| payload.get("compileResult"))
                 {
-                    let _success = payload
-                        .get("success")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    let result_str = payload.get("result").and_then(Value::as_str).unwrap_or("");
-                    let ok = result_str.contains("ok = True") || result_str.contains("ok=True");
-                    println!(
-                        "{{\"ok\": {}, \"message\": \"{}\", \"source\": \"dynamic-code\"}}",
-                        ok,
-                        if ok {
-                            "Compilation succeeded."
-                        } else {
-                            "Script compilation failed. Check Unity console for errors."
-                        }
-                    );
-                    if !ok {
+                    println!("{}", serde_json::to_string_pretty(payload)?);
+                    if payload.get("ok").and_then(Value::as_bool) != Some(true) {
                         std::process::exit(1);
                     }
                 } else {
@@ -3767,9 +3871,7 @@ fn run_batch_compile(args: CompileArgs) -> anyhow::Result<()> {
                 return Ok(());
             }
             Err(error) => {
-                eprintln!(
-                    "Dynamic code compile also failed: {error}, falling back to batch mode..."
-                );
+                eprintln!("Live Unity Editor compile failed to connect, falling back to batch mode: {error}");
             }
         }
     } else {
@@ -3795,18 +3897,16 @@ fn run_batch_compile(args: CompileArgs) -> anyhow::Result<()> {
 
     let status = ProcessCommand::new(&launch_target.executable)
         .args(&launch_target.prefix_args)
-        .arg("-batchmode")
-        .arg("-quit")
-        .arg("-nographics")
-        .arg("-projectPath")
-        .arg(&project_root)
-        .arg("-executeMethod")
-        .arg("Linalab.Lux.Editor.LuxBatchCompile.Compile")
-        .arg("-logFile")
-        .arg(&log_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .args([
+            "-batchmode",
+            "-quit",
+            "-projectPath",
+            project_root.to_str().unwrap(),
+            "-executeMethod",
+            "Linalab.Lux.Editor.LuxBatchAutomation.Compile",
+            "-logFile",
+            log_path.to_str().unwrap(),
+        ])
         .status()
         .with_context(|| {
             format!(
@@ -3815,21 +3915,35 @@ fn run_batch_compile(args: CompileArgs) -> anyhow::Result<()> {
             )
         })?;
 
-    if compile_result_path.exists() {
-        let result_text = fs::read_to_string(&compile_result_path)
-            .with_context(|| format!("failed to read {}", compile_result_path.display()))?;
-        println!("{}", result_text.trim());
-    } else {
+    if !status.success() {
         println!(
-            "{{ \"ok\": false, \"message\": \"Unity exited without writing CompileResult.json\", \"unity_exit_success\": {} }}",
-            status.success()
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "ok": false,
+                "message": format!("Unity batch compile exited with status: {status}"),
+                "logPath": log_path.to_string_lossy(),
+            }))?
+        );
+        std::process::exit(1);
+    }
+
+    if !compile_result_path.exists() {
+        bail!(
+            "Unity compile result not found at {}. Log: {}",
+            compile_result_path.display(),
+            log_path.display()
         );
     }
 
-    if !status.success() {
-        eprintln!("Lux compile failed. See log: {}", log_path.display());
+    let result_text = fs::read_to_string(&compile_result_path)
+        .with_context(|| format!("failed to read {}", compile_result_path.display()))?;
+    println!("{result_text}");
+    let result_json: Value =
+        serde_json::from_str(&result_text).context("compile result JSON invalid")?;
+    if result_json.get("ok").and_then(Value::as_bool) != Some(true) {
         std::process::exit(1);
     }
+
     Ok(())
 }
 
@@ -3839,18 +3953,17 @@ fn run_batch_compile(args: CompileArgs) -> anyhow::Result<()> {
 
 fn run_batch_tests(args: RunTestsArgs) -> anyhow::Result<()> {
     let project_root = resolve_project_root(&args.project_path)?;
-    let launch_target = resolve_unity_launch_target(&project_root)?;
     let platform = args.test_platform;
-
-    let results_dir = project_root.join("TestResults");
-    fs::create_dir_all(&results_dir)
-        .with_context(|| format!("failed to create {}", results_dir.display()))?;
-
     let platform_label = match platform.as_str() {
         "EditMode" => "EditMode",
         "PlayMode" => "PlayMode",
         other => other,
     };
+
+    let results_dir = project_root.join("TestResults");
+    fs::create_dir_all(&results_dir)
+        .with_context(|| format!("failed to create {}", results_dir.display()))?;
+
     let test_results = match &args.test_results {
         Some(p) => p.clone(),
         None => results_dir.join(format!("{}Results.xml", platform_label)),
@@ -3859,6 +3972,94 @@ fn run_batch_tests(args: RunTestsArgs) -> anyhow::Result<()> {
         Some(p) => p.clone(),
         None => results_dir.join(format!("{}Log.log", platform_label)),
     };
+
+    if let Ok(discovery) = read_unity_bridge_discovery(&project_root) {
+        let test_code = format!(
+            "var asm = System.AppDomain.CurrentDomain.GetAssemblies(); \
+             System.Type apiType = null; System.Type filterType = null; \
+             System.Type settingsType = null; System.Type testModeType = null; \
+             foreach (var a in asm) {{ \
+               var t1 = a.GetType(\"UnityEditor.TestTools.TestRunner.Api.TestRunnerApi\", false); \
+               if (t1 != null && apiType == null) apiType = t1; \
+               var t2 = a.GetType(\"UnityEditor.TestTools.TestRunner.Api.Filter\", false); \
+               if (t2 != null && filterType == null) filterType = t2; \
+               var t3 = a.GetType(\"UnityEditor.TestTools.TestRunner.Api.ExecutionSettings\", false); \
+               if (t3 != null && settingsType == null) settingsType = t3; \
+               var t4 = a.GetType(\"UnityEditor.TestTools.TestRunner.Api.TestMode\", false); \
+               if (t4 != null && testModeType == null) testModeType = t4; \
+             }} \
+             if (apiType == null || filterType == null || settingsType == null || testModeType == null) \
+               return \"MISSING:\" + (apiType != null) + \",\" + (filterType != null) + \",\" + (settingsType != null) + \",\" + (testModeType != null); \
+             var filter = System.Activator.CreateInstance(filterType); \
+             var testMode = System.Enum.Parse(testModeType, \"{platform_label}\"); \
+             filterType.GetField(\"testMode\").SetValue(filter, testMode); \
+             var filters = System.Array.CreateInstance(filterType, 1); \
+             filters.SetValue(filter, 0); \
+             var settings = System.Activator.CreateInstance(settingsType, new object[]{{ filters }}); \
+             var api = UnityEngine.ScriptableObject.CreateInstance(apiType); \
+             var executeMethod = apiType.GetMethod(\"Execute\", new[] {{ settingsType }}); \
+             var result = executeMethod.Invoke(api, new object[]{{ settings }}); \
+             return \"testId=\" + (result != null ? result.ToString() : \"null\");"
+        );
+        let request = json!({
+            "schemaVersion": 1,
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "command": "execute_lux_dynamic_code",
+            "token": discovery.token,
+            "params": {
+                "dynamicCode": test_code
+            }
+        });
+        match send_unity_tcp_line_with_timeout(
+            &discovery,
+            &format!("{}\n", serde_json::to_string(&request)?),
+            Duration::from_secs(120),
+        ) {
+            Ok(response) => {
+                let response_json: Value = serde_json::from_str(&response)
+                    .context("run_tests dynamic code TCP response was not valid JSON")?;
+                if response_json.get("errorCode").and_then(Value::as_str) == Some("unknown_command")
+                {
+                    eprintln!("execute_lux_dynamic_code is not registered in Unity AI Bridge. Falling back to batch mode.");
+                } else {
+                    let bridge_ok = response_json.get("ok").and_then(Value::as_bool) == Some(true);
+                    let dynamic_ok = response_json
+                        .get("payload")
+                        .and_then(|p| p.get("dynamicCodeResult"))
+                        .and_then(|d| d.get("success"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let overall_ok = bridge_ok && dynamic_ok;
+
+                    if let Some(dyn_result) = response_json
+                        .get("payload")
+                        .and_then(|p| p.get("dynamicCodeResult"))
+                    {
+                        println!("{}", serde_json::to_string_pretty(dyn_result)?);
+                    } else {
+                        println!("{}", serde_json::to_string_pretty(&response_json)?);
+                    }
+                    if !overall_ok {
+                        let error_msg = response_json
+                            .get("errorMessage")
+                            .or_else(|| response_json.get("message"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown error");
+                        eprintln!("Lux run-tests via dynamic code failed: {error_msg}");
+                    } else {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Live Unity Editor run-tests failed to connect, falling back to batch mode: {error}");
+            }
+        }
+    } else {
+        eprintln!("No live Unity Editor detected, falling back to batch mode...");
+    }
+
+    let launch_target = resolve_unity_launch_target(&project_root)?;
 
     eprintln!(
         "Lux run-tests: launching Unity in batch mode for {} ({})",
@@ -4078,7 +4279,6 @@ async fn shutdown_signal(state: server::GatewayState, idle_timeout: Option<Durat
     }
 }
 
-
 fn run_install_command(args: InstallArgs) -> anyhow::Result<()> {
     let project_path = resolve_project_root(&args.project)?;
     if !is_unity_project(&project_path) {
@@ -4096,9 +4296,16 @@ fn run_install_command(args: InstallArgs) -> anyhow::Result<()> {
 
     if package_dir.exists() {
         if args.json {
-            println!("{{\"ok\": true, \"message\": \"package already installed\", \"path\": \"{}\"}}", package_dir.display());
+            println!(
+                "{{\"ok\": true, \"message\": \"package already installed\", \"path\": \"{}\"}}",
+                package_dir.display()
+            );
         } else {
-            println!("Package {} is already installed at {}", package_name, package_dir.display());
+            println!(
+                "Package {} is already installed at {}",
+                package_name,
+                package_dir.display()
+            );
         }
         return Ok(());
     }
@@ -4107,10 +4314,13 @@ fn run_install_command(args: InstallArgs) -> anyhow::Result<()> {
     if manifest_path.exists() {
         let content = fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed to read {}", manifest_path.display()))?;
-        let mut manifest: serde_json::Value = serde_json::from_str(&content)
-            .with_context(|| "failed to parse manifest.json")?;
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&content).with_context(|| "failed to parse manifest.json")?;
 
-        if let Some(deps) = manifest.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+        if let Some(deps) = manifest
+            .get_mut("dependencies")
+            .and_then(|d| d.as_object_mut())
+        {
             if deps.contains_key(package_name) {
                 if args.json {
                     println!("{{\"ok\": true, \"message\": \"package already in manifest\"}}");
@@ -4138,11 +4348,17 @@ fn run_install_command(args: InstallArgs) -> anyhow::Result<()> {
             bail!("manifest.json has no dependencies object");
         }
     } else {
-        bail!("Packages/manifest.json not found at {}", manifest_path.display());
+        bail!(
+            "Packages/manifest.json not found at {}",
+            manifest_path.display()
+        );
     }
 
     if args.json {
-        println!("{{\"ok\": true, \"package\": \"{}\", \"repo\": \"{}\"}}", package_name, repo_url);
+        println!(
+            "{{\"ok\": true, \"package\": \"{}\", \"repo\": \"{}\"}}",
+            package_name, repo_url
+        );
     } else {
         println!("Added {} to project (source: {})", package_name, repo_url);
         println!("Unity will resolve the package on next refresh.");

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use axum::{
     extract::State,
@@ -33,6 +33,14 @@ pub struct UnityLaunchResponse {
     pub pid: Option<u32>,
     pub executable: Option<String>,
     pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_ready: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_path: Option<String>,
     pub message: String,
 }
 
@@ -53,10 +61,7 @@ pub fn routes() -> Router<GatewayState> {
         .route("/version", get(unity_version))
 }
 
-fn require_token(
-    state: &GatewayState,
-    headers: &HeaderMap,
-) -> Result<(), Response> {
+fn require_token(state: &GatewayState, headers: &HeaderMap) -> Result<(), Response> {
     let token = headers
         .get("x-lux-token")
         .and_then(|value| value.to_str().ok());
@@ -64,13 +69,11 @@ fn require_token(
     if state.accepts_token(token) {
         Ok(())
     } else {
-        Err(
-            (
-                StatusCode::UNAUTHORIZED,
-                "invalid or missing Lux gateway token",
-            )
-                .into_response(),
+        Err((
+            StatusCode::UNAUTHORIZED,
+            "invalid or missing Lux gateway token",
         )
+            .into_response())
     }
 }
 
@@ -82,6 +85,23 @@ async fn unity_launch(
     require_token(&state, &headers)?;
 
     let project_root = resolve_project_root_from_state(&state, body.project_path.as_deref())?;
+    let project_str = project_root.display().to_string();
+
+    if let Ok(backend) = crate::try_ping_unity_bridge_backend(&project_root, Duration::from_secs(1))
+    {
+        return Ok(Json(UnityLaunchResponse {
+            status: "already_running".to_string(),
+            pid: None,
+            executable: None,
+            project_path: Some(project_str),
+            bridge_ready: Some(true),
+            backend_host: Some(backend.host),
+            backend_port: Some(backend.port),
+            discovery_path: Some(backend.discovery_path.display().to_string()),
+            message: "Unity editor is already running with a reachable Lux backend; launch skipped"
+                .to_string(),
+        }));
+    }
 
     let launch_target = crate::resolve_unity_launch_target(&project_root).map_err(|e| {
         (
@@ -92,7 +112,6 @@ async fn unity_launch(
     })?;
 
     let exe_str = launch_target.executable.display().to_string();
-    let project_str = project_root.display().to_string();
 
     let mut cmd = std::process::Command::new(&launch_target.executable);
     cmd.args(&launch_target.prefix_args)
@@ -130,6 +149,10 @@ async fn unity_launch(
         pid: Some(pid),
         executable: Some(exe_str),
         project_path: Some(project_str),
+        bridge_ready: Some(false),
+        backend_host: None,
+        backend_port: None,
+        discovery_path: None,
         message: "Unity editor process spawned successfully".to_string(),
     };
 
@@ -184,14 +207,13 @@ async fn unity_version(
             .into_response()
     })?;
 
-    let version =
-        crate::read_unity_editor_version(project_root).map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                format!("cannot read Unity version: {e}"),
-            )
-                .into_response()
-        })?;
+    let version = crate::read_unity_editor_version(project_root).map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("cannot read Unity version: {e}"),
+        )
+            .into_response()
+    })?;
 
     Ok(Json(json!({
         "version": version,
@@ -251,10 +273,9 @@ mod tests {
 
     #[test]
     fn unity_launch_request_deserializes_with_values() {
-        let req: UnityLaunchRequest = serde_json::from_str(
-            r#"{"projectPath": "/tmp/myproject", "noWait": true}"#,
-        )
-        .expect("full object should parse");
+        let req: UnityLaunchRequest =
+            serde_json::from_str(r#"{"projectPath": "/tmp/myproject", "noWait": true}"#)
+                .expect("full object should parse");
         assert_eq!(req.project_path.as_deref(), Some("/tmp/myproject"));
         assert_eq!(req.no_wait, Some(true));
     }

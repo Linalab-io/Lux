@@ -215,8 +215,8 @@ async fn renew_addon_token(
     let gateway_token = &state.config.token;
 
     if let Some(addon_token) = request.addon_token {
-        let verified = addon_auth::verify_addon_token(gateway_token, &addon_token)
-            .map_err(|e| {
+        let verified =
+            addon_auth::verify_addon_token(gateway_token, &addon_token).map_err(|e| {
                 if e.to_string().contains("expired") {
                     (
                         StatusCode::UNAUTHORIZED,
@@ -245,11 +245,7 @@ async fn renew_addon_token(
             expires_at: new_verified.expires_at,
         }))
     } else {
-        Err((
-            StatusCode::BAD_REQUEST,
-            "addon_token field is required",
-        )
-            .into_response())
+        Err((StatusCode::BAD_REQUEST, "addon_token field is required").into_response())
     }
 }
 
@@ -323,10 +319,7 @@ mod tests {
     }
 
     fn create_test_state_with_project() -> GatewayState {
-        let dir = std::env::temp_dir().join(format!(
-            "lux-addon-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("lux-addon-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("Packages/com.linalab.lux")).unwrap();
         std::fs::create_dir_all(dir.join("Assets")).unwrap();
         std::fs::create_dir_all(dir.join("ProjectSettings")).unwrap();
@@ -363,9 +356,7 @@ mod tests {
     }
 
     async fn response_json(body: Body) -> serde_json::Value {
-        let bytes = axum::body::to_bytes(body, 1024 * 1024)
-            .await
-            .unwrap();
+        let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -402,10 +393,7 @@ mod tests {
         assert_eq!(json["name"], "com.linalab.lux");
         assert_eq!(json["visibility"], "unknown");
 
-        let response = app
-            .oneshot(auth_request("GET", "/"))
-            .await
-            .unwrap();
+        let response = app.oneshot(auth_request("GET", "/")).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let list = response_json(response.into_body()).await;
         assert_eq!(list.as_array().unwrap().len(), 1);
@@ -494,7 +482,11 @@ mod tests {
         let app = routes().with_state(state);
 
         let response = app
-            .oneshot(auth_json_request("POST", "/auth/renew", serde_json::json!({})))
+            .oneshot(auth_json_request(
+                "POST",
+                "/auth/renew",
+                serde_json::json!({}),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);

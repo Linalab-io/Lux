@@ -104,7 +104,11 @@ pub fn issue_addon_token(gateway_token: &str, repos: &[String]) -> Result<String
     issue_addon_token_with_ttl(gateway_token, repos, DEFAULT_TOKEN_TTL_SECS)
 }
 
-pub fn issue_addon_token_with_ttl(gateway_token: &str, repos: &[String], ttl_secs: u64) -> Result<String> {
+pub fn issue_addon_token_with_ttl(
+    gateway_token: &str,
+    repos: &[String],
+    ttl_secs: u64,
+) -> Result<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(gateway_token.as_bytes())
         .context("Failed to create HMAC")?;
 
@@ -166,7 +170,11 @@ struct GithubRepoVisibility {
     private: bool,
 }
 
-pub async fn check_repo_visibility(owner: &str, repo: &str, access_token: Option<&str>) -> Result<RepoVisibility> {
+pub async fn check_repo_visibility(
+    owner: &str,
+    repo: &str,
+    access_token: Option<&str>,
+) -> Result<RepoVisibility> {
     let client = Client::new();
     let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
     let mut req = client
@@ -240,7 +248,11 @@ mod tests {
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("expired"), "expected expired error, got: {}", err_msg);
+        assert!(
+            err_msg.contains("expired"),
+            "expected expired error, got: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -251,9 +263,16 @@ mod tests {
         let token = issue_addon_token_with_ttl(gateway_token, &repos, 7200).unwrap();
         let verified = verify_addon_token(gateway_token, &token).unwrap();
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let diff = verified.expires_at.abs_diff(now);
-        assert!(diff >= 7190 && diff <= 7210, "expected ~7200s TTL, got diff={}", diff);
+        assert!(
+            diff >= 7190 && diff <= 7210,
+            "expected ~7200s TTL, got diff={}",
+            diff
+        );
     }
 
     #[test]
@@ -264,9 +283,16 @@ mod tests {
         let token = issue_addon_token(gateway_token, &repos).unwrap();
         let verified = verify_addon_token(gateway_token, &token).unwrap();
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let diff = verified.expires_at.abs_diff(now);
-        assert!(diff >= 86390 && diff <= 86410, "expected ~86400s TTL, got diff={}", diff);
+        assert!(
+            diff >= 86390 && diff <= 86410,
+            "expected ~86400s TTL, got diff={}",
+            diff
+        );
     }
 
     #[test]
