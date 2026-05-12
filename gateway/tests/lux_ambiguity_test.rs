@@ -177,6 +177,77 @@ fn test_ambiguity_score_clamped() {
     }
 }
 
+#[test]
+fn test_ambiguity_missing_unity_produces_question() {
+    let spec = SpecProject::default();
+
+    let report = calculate_ambiguity(&spec);
+
+    assert!(report
+        .targeted_questions
+        .iter()
+        .any(|question| question.phase == "unity.required_version"));
+}
+
+#[test]
+fn test_ambiguity_missing_targets_produces_question() {
+    let spec = SpecProject::default();
+
+    let report = calculate_ambiguity(&spec);
+
+    assert!(report
+        .targeted_questions
+        .iter()
+        .any(|question| question.phase == "targets.platforms"));
+}
+
+#[test]
+fn test_ambiguity_missing_testing_produces_question() {
+    let spec = SpecProject::default();
+
+    let report = calculate_ambiguity(&spec);
+
+    assert!(report
+        .targeted_questions
+        .iter()
+        .any(|question| question.phase == "testing.strategy"));
+}
+
+#[test]
+fn test_ambiguity_filled_unity_no_question() {
+    let mut spec = SpecProject::default();
+    spec.unity = Some(UnitySpec {
+        required_version: Some("6000.0.0f1".to_string()),
+        detected_version: None,
+        render_pipeline: None,
+        scripting_backend: None,
+        ..UnitySpec::default()
+    });
+
+    let report = calculate_ambiguity(&spec);
+
+    assert!(!report
+        .targeted_questions
+        .iter()
+        .any(|question| question.phase == "unity.required_version"));
+}
+
+#[test]
+fn test_ambiguity_new_field_questions_have_spec_domain() {
+    let spec = SpecProject::default();
+
+    let report = calculate_ambiguity(&spec);
+
+    assert!(report
+        .targeted_questions
+        .iter()
+        .filter(|question| matches!(
+            question.phase.as_str(),
+            "unity.required_version" | "targets.platforms" | "packages.required" | "testing.strategy"
+        ))
+        .all(|question| question.domain == "spec"));
+}
+
 fn full_spec(workspace: &TestWorkspace) -> SpecProject {
     let mut spec = SpecProject::default();
     spec.unity = Some(UnitySpec {
@@ -184,18 +255,22 @@ fn full_spec(workspace: &TestWorkspace) -> SpecProject {
         detected_version: Some("6000.0.0f1".to_string()),
         render_pipeline: Some("urp".to_string()),
         scripting_backend: Some("il2cpp".to_string()),
+        ..UnitySpec::default()
     });
     spec.targets = Some(TargetsSpec {
         platforms: vec!["windows".to_string(), "macos".to_string()],
         min_sdk: Default::default(),
         test_platform: Some("windows".to_string()),
+        target_platforms: Vec::new(),
     });
     spec.packages = Some(PackagesSpec {
         required: vec![PackageEntry {
             name: "com.unity.inputsystem".to_string(),
             reason: Some("input handling".to_string()),
             version: Some("1.7.0".to_string()),
+            required_by_domain: Vec::new(),
         }],
+        recommended: vec![],
         forbidden: vec![],
         detected: vec![],
     });

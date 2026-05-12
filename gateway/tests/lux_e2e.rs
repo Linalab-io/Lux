@@ -327,12 +327,14 @@ fn complete_spec(project_path: &Path) -> SpecProject {
     let now = Utc::now().to_rfc3339();
     SpecProject {
         version: "1.0.0".to_string(),
+        schema_version: "2.0".to_string(),
         project_id: uuid::Uuid::new_v4().to_string(),
         project_name: "Lux E2E Harness".to_string(),
         created_at: now.clone(),
         updated_at: now,
         source: "mock-ai-session".to_string(),
         status: SpecStatus::Active,
+        meta: lux::lux_spec::ProjectMeta::default(),
         domains: SpecDomains {
             design: Some(domain(
                 project_path,
@@ -387,6 +389,8 @@ fn complete_spec(project_path: &Path) -> SpecProject {
             )),
             custom: HashMap::new(),
         },
+        dialectic: lux::lux_spec::DialecticState::default(),
+        roadmap: lux::lux_spec::RoadmapSpec::default(),
         unity: None,
         targets: None,
         packages: None,
@@ -424,14 +428,11 @@ fn domain(project_path: &Path, name: &str, fields: &[&str]) -> DomainSpec {
         .map(|field| ((*field).to_string(), json!(format!("{name} {field} value"))))
         .collect::<HashMap<_, _>>();
 
-    DomainSpec {
-        name: name.to_string(),
-        content_path: content_path.display().to_string(),
-        fields: values,
-        ambiguity_score: 0.1,
-        last_evaluated: Some(Utc::now().to_rfc3339()),
-        defined: true,
-    }
+    let mut domain = DomainSpec::new(name, content_path.display().to_string(), 0.1);
+    domain.fields = values;
+    domain.last_evaluated = Some(Utc::now().to_rfc3339());
+    domain.defined = true;
+    domain
 }
 
 fn domain_markdown(name: &str) -> String {

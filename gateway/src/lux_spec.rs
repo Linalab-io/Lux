@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{stdin, stdout, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -8,18 +9,261 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::lux_ambiguity::{self, TargetedQuestion};
+use crate::project::{self, UnityProjectDetection};
+
 pub const SUPPORTED_SPEC_MAJOR_VERSION: &str = "1";
+pub const SUPPORTED_SPEC_SCHEMA_MAJOR_VERSION: &str = "2";
+
+fn default_schema_version() -> String {
+    "2.0".to_string()
+}
+
+pub trait SpecQuestionIo {
+    fn present_detection(&mut self, detection: Option<&UnityProjectDetection>) -> Result<()>;
+
+    fn ask(
+        &mut self,
+        question: &TargetedQuestion,
+        iteration: u32,
+        max_iterations: u32,
+    ) -> Result<Option<String>>;
+
+    fn report_progress(&mut self, ambiguity_score: f64, target_ambiguity: f64) -> Result<()>;
+}
+
+pub struct TerminalSpecQuestionIo;
+
+impl SpecQuestionIo for TerminalSpecQuestionIo {
+    fn present_detection(&mut self, detection: Option<&UnityProjectDetection>) -> Result<()> {
+        if let Some(d) = detection {
+            println!("🔍 Detected Unity project:");
+            if let Some(ref v) = d.editor_version {
+                println!("   Version: {}", v);
+            }
+            if let Some(ref rp) = d.render_pipeline {
+                println!("   Render Pipeline: {}", rp);
+            }
+            println!("   Packages: {} detected", d.packages.len());
+            if d.test_framework_detected {
+                println!("   Test Framework: Unity Test Framework");
+            }
+        } else {
+            println!("ℹ️  Not a Unity project — skipping Unity auto-detection");
+        }
+        Ok(())
+    }
+
+    fn ask(
+        &mut self,
+        question: &TargetedQuestion,
+        iteration: u32,
+        max_iterations: u32,
+    ) -> Result<Option<String>> {
+        println!("\n[{} / {}]", iteration + 1, max_iterations);
+        println!("❓ {}", question.question);
+        if !question.options.is_empty() {
+            println!("   Options: {}", question.options.join(", "));
+        }
+        if let Some(ref default) = question.default_value {
+            print!("   → [{}]: ", default);
+        } else {
+            print!("   → ");
+        }
+        if stdout().flush().is_err() {
+            return Ok(None);
+        }
+
+        let mut input = String::new();
+        match stdin().read_line(&mut input) {
+            Ok(0) => Ok(question.default_value.clone()),
+            Ok(_) => {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    Ok(question.default_value.clone())
+                } else {
+                    Ok(Some(trimmed.to_string()))
+                }
+            }
+            Err(_) => Ok(question.default_value.clone()),
+        }
+    }
+
+    fn report_progress(&mut self, ambiguity_score: f64, target_ambiguity: f64) -> Result<()> {
+        println!(
+            "📊 Ambiguity: {:.3} / target {:.3}",
+            ambiguity_score, target_ambiguity
+        );
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LuxInitInteractiveOptions {
+    pub interactive: bool,
+    pub target_ambiguity: f64,
+    pub max_iterations: u32,
+}
+
+impl Default for LuxInitInteractiveOptions {
+    fn default() -> Self {
+        Self {
+            interactive: true,
+            target_ambiguity: 0.02,
+            max_iterations: 10,
+        }
+    }
+}
+
+pub fn lux_init_interactive(
+    project_path: &Path,
+    io: &mut dyn SpecQuestionIo,
+    options: LuxInitInteractiveOptions,
+) -> Result<PathBuf> {
+    let existing_spec = project_path.join(".lux/spec.json").is_file();
+    let lux_path = lux_init(project_path)?;
+    let mut spec = lux_load(project_path)?;
+
+    if existing_spec {
+        let report = lux_ambiguity::calculate_ambiguity(&spec);
+        let defined_domains = count_defined_domains(&spec);
+        println!("🔁 Re-evaluating existing .lux workspace");
+        println!("   Defined domains: {defined_domains}");
+        println!("   Current ambiguity: {:.3}", report.overall_score);
+    } else {
+        println!("✨ Initializing new .lux workspace");
+    }
+
+    let detection = project::detect_unity_project(project_path)?;
+    io.present_detection(detection.as_ref())?;
+
+    if let Some(ref detected_project) = detection {
+        apply_detection_to_spec(&mut spec, detected_project);
+    }
+
+    spec.validate()
+        .map_err(|error| anyhow::anyhow!("Validation error: {error}"))?;
+    lux_save(project_path, &spec)?;
+
+    if !options.interactive {
+        io.report_progress(
+            lux_ambiguity::calculate_ambiguity(&spec).overall_score,
+            options.target_ambiguity,
+        )?;
+        return Ok(lux_path);
+    }
+
+    let max_iterations = options.max_iterations.max(1);
+    for iteration in 0..max_iterations {
+        let report = lux_ambiguity::calculate_ambiguity(&spec);
+
+        if report.overall_score <= options.target_ambiguity {
+            io.report_progress(report.overall_score, options.target_ambiguity)?;
+            println!("✅ Spec is sufficiently detailed!");
+            break;
+        }
+
+        io.report_progress(report.overall_score, options.target_ambiguity)?;
+
+        let question = report
+            .targeted_questions
+            .iter()
+            .filter(|question| can_answer_direct_question(&spec, question))
+            .max_by(|left, right| {
+                left.priority
+                    .partial_cmp(&right.priority)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+        let Some(question) = question else {
+            println!("ℹ️  No more spec-specific questions available.");
+            break;
+        };
+
+        let answer = io.ask(question, iteration, max_iterations)?;
+        match answer {
+            Some(answer) => {
+                answer_direct(&mut spec, question, &answer)?;
+                spec.validate()
+                    .map_err(|error| anyhow::anyhow!("Validation error: {error}"))?;
+                lux_save(project_path, &spec)?;
+            }
+            None => break,
+        }
+    }
+
+    lux_save(project_path, &spec)?;
+    Ok(lux_path)
+}
+
+fn count_defined_domains(spec: &SpecProject) -> usize {
+    let built_in_count = [
+        spec.domains.design.as_ref(),
+        spec.domains.architecture.as_ref(),
+        spec.domains.art_style.as_ref(),
+        spec.domains.audio.as_ref(),
+        spec.domains.narrative.as_ref(),
+        spec.domains.levels.as_ref(),
+        spec.domains.ui_ux.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|domain| domain.defined)
+    .count();
+
+    built_in_count
+        + spec
+            .domains
+            .custom
+            .values()
+            .filter(|domain| domain.defined)
+            .count()
+}
+
+fn can_answer_direct_question(spec: &SpecProject, question: &TargetedQuestion) -> bool {
+    if question.domain != "spec" {
+        return false;
+    }
+
+    match question.phase.as_str() {
+        "unity.required_version" => spec
+            .unity
+            .as_ref()
+            .is_none_or(|unity| unity.required_version.as_ref().is_none_or(|value| value.trim().is_empty())),
+        "targets.platforms" => spec
+            .targets
+            .as_ref()
+            .is_none_or(|targets| targets.platforms.is_empty()),
+        "packages.required" => spec
+            .packages
+            .as_ref()
+            .is_none_or(|packages| packages.required.is_empty()),
+        "testing.strategy" => spec
+            .testing
+            .as_ref()
+            .is_none_or(|testing| testing.strategy.as_ref().is_none_or(|value| value.trim().is_empty())),
+        _ => false,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpecProject {
     pub version: String,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
     pub project_id: String,
     pub project_name: String,
     pub created_at: String,
     pub updated_at: String,
     pub source: String,
     pub status: SpecStatus,
+    #[serde(default)]
+    pub meta: ProjectMeta,
     pub domains: SpecDomains,
+    #[serde(default)]
+    pub dialectic: DialecticState,
+    #[serde(default)]
+    pub roadmap: RoadmapSpec,
     #[serde(default)]
     pub unity: Option<UnitySpec>,
     #[serde(default)]
@@ -39,13 +283,17 @@ impl Default for SpecProject {
         let now = Utc::now().to_rfc3339();
         Self {
             version: "1.0.0".to_string(),
+            schema_version: "2.0".to_string(),
             project_id: String::new(),
             project_name: String::new(),
             created_at: now.clone(),
             updated_at: now,
             source: "lux-init".to_string(),
             status: SpecStatus::Draft,
+            meta: ProjectMeta::default(),
             domains: SpecDomains::default(),
+            dialectic: DialecticState::default(),
+            roadmap: RoadmapSpec::default(),
             unity: None,
             targets: None,
             packages: None,
@@ -57,9 +305,151 @@ impl Default for SpecProject {
     }
 }
 
+pub fn apply_detection_to_spec(spec: &mut SpecProject, detection: &UnityProjectDetection) {
+    if spec.project_name.is_empty() || spec.project_name == "untitled" {
+        spec.project_name = detection.project_name.clone();
+    }
+
+    if spec.unity.is_none() {
+        spec.unity = Some(UnitySpec::default());
+    }
+    if let Some(ref mut unity) = spec.unity {
+        unity.detected_version = detection.editor_version.clone();
+        if unity.render_pipeline.is_none() {
+            unity.render_pipeline = detection.render_pipeline.clone();
+        }
+        if unity.scripting_backend.is_none() {
+            unity.scripting_backend = detection.scripting_backend.clone();
+        }
+    }
+
+    if spec.targets.is_none() && !detection.target_platforms.is_empty() {
+        spec.targets = Some(TargetsSpec {
+            platforms: detection.target_platforms.clone(),
+            min_sdk: HashMap::new(),
+            test_platform: None,
+            target_platforms: Vec::new(),
+        });
+    }
+
+    if spec.packages.is_none() {
+        spec.packages = Some(PackagesSpec::default());
+    }
+    if let Some(ref mut packages) = spec.packages {
+        packages.detected = detection
+            .packages
+            .iter()
+            .map(|dp: &crate::project::DetectedPackage| PackageEntry {
+                name: dp.name.clone(),
+                version: dp.version.clone(),
+                reason: None,
+                required_by_domain: Vec::new(),
+            })
+            .collect();
+    }
+
+    if detection.test_framework_detected {
+        if spec.testing.is_none() {
+            spec.testing = Some(TestingSpec {
+                framework: Some("Unity Test Framework".to_string()),
+                strategy: None,
+                coverage: false,
+            });
+        } else if spec.testing.as_ref().unwrap().framework.is_none() {
+            spec.testing.as_mut().unwrap().framework = Some("Unity Test Framework".to_string());
+        }
+    }
+
+    if spec.glossary.is_none() {
+        spec.glossary = Some(GlossarySpec::default());
+    }
+}
+
+pub fn answer_direct(
+    spec: &mut SpecProject,
+    question: &TargetedQuestion,
+    answer: &str,
+) -> Result<()> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        bail!("Answer cannot be empty");
+    }
+
+    if question.domain != "spec" {
+        return Ok(());
+    }
+
+    match question.phase.as_str() {
+        "unity.required_version" => {
+            let unity = spec.unity.get_or_insert_with(UnitySpec::default);
+            if unity
+                .required_version
+                .as_ref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                unity.required_version = Some(answer.to_string());
+            }
+        }
+        "targets.platforms" => {
+            let targets = spec.targets.get_or_insert_with(TargetsSpec::default);
+            if targets.platforms.is_empty() {
+                let mut seen = HashSet::new();
+                targets.platforms = answer
+                    .split(&[',', ';', '\n'][..])
+                    .map(|value| value.trim().to_lowercase())
+                    .filter(|value| !value.is_empty())
+                    .filter(|value| seen.insert(value.clone()))
+                    .collect();
+            }
+        }
+        "packages.required" => {
+            let packages = spec.packages.get_or_insert_with(PackagesSpec::default);
+            let mut seen = packages
+                .required
+                .iter()
+                .map(|package| package.name.clone())
+                .collect::<HashSet<_>>();
+
+            packages.required.extend(
+                answer
+                    .split(&[',', ';', '\n'][..])
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .filter(|name| seen.insert((*name).to_string()))
+                    .map(|name| PackageEntry {
+                        name: name.to_string(),
+                        reason: None,
+                        version: None,
+                        required_by_domain: Vec::new(),
+                    }),
+            );
+        }
+        "testing.strategy" => {
+            let testing = spec.testing.get_or_insert_with(TestingSpec::default);
+            if testing
+                .strategy
+                .as_ref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                testing.strategy = Some(answer.to_string());
+            }
+        }
+        _ => return Ok(()),
+    }
+
+    if let Err(error) = spec.validate() {
+        bail!("Validation error after applying answer: {error}");
+    }
+
+    Ok(())
+}
+
 impl SpecProject {
     pub fn validate(&self) -> Result<(), String> {
-        validate_supported_version(&self.version)?;
+        if !self.schema_version.starts_with(SUPPORTED_SPEC_SCHEMA_MAJOR_VERSION) {
+            validate_supported_version(&self.version)?;
+            return Ok(());
+        }
         validate_score("overall_ambiguity", self.overall_ambiguity)?;
         self.domains.validate()?;
         if let Some(unity) = &self.unity {
@@ -151,6 +541,26 @@ pub struct DomainSpec {
     pub ambiguity_score: f64,
     pub last_evaluated: Option<String>,
     pub defined: bool,
+    #[serde(default)]
+    pub kind: DomainKind,
+    #[serde(default)]
+    pub status: DomainStatus,
+    #[serde(default)]
+    pub goals: Vec<String>,
+    #[serde(default)]
+    pub non_goals: Vec<String>,
+    #[serde(default)]
+    pub requirements: Vec<Requirement>,
+    #[serde(default)]
+    pub dependencies: Vec<SpecLink>,
+    #[serde(default)]
+    pub decisions: Vec<SpecDecision>,
+    #[serde(default)]
+    pub open_questions: Vec<SpecQuestion>,
+    #[serde(default)]
+    pub glossary_terms: Vec<String>,
+    #[serde(default)]
+    pub tests: Vec<String>,
 }
 
 impl DomainSpec {
@@ -166,6 +576,16 @@ impl DomainSpec {
             ambiguity_score: clamp_score(ambiguity_score),
             last_evaluated: None,
             defined: false,
+            kind: DomainKind::default(),
+            status: DomainStatus::default(),
+            goals: Vec::new(),
+            non_goals: Vec::new(),
+            requirements: Vec::new(),
+            dependencies: Vec::new(),
+            decisions: Vec::new(),
+            open_questions: Vec::new(),
+            glossary_terms: Vec::new(),
+            tests: Vec::new(),
         }
     }
 
@@ -192,6 +612,18 @@ pub struct UnitySpec {
     pub detected_version: Option<String>,
     pub render_pipeline: Option<String>,
     pub scripting_backend: Option<String>,
+    #[serde(default)]
+    pub version_policy: Option<String>,
+    #[serde(default)]
+    pub color_space: Option<String>,
+    #[serde(default)]
+    pub input_system: Option<String>,
+    #[serde(default)]
+    pub api_compatibility_level: Option<String>,
+    #[serde(default)]
+    pub serialization_mode: Option<String>,
+    #[serde(default)]
+    pub project_settings_refs: Vec<String>,
 }
 
 impl Default for UnitySpec {
@@ -201,6 +633,12 @@ impl Default for UnitySpec {
             detected_version: None,
             render_pipeline: None,
             scripting_backend: None,
+            version_policy: None,
+            color_space: None,
+            input_system: None,
+            api_compatibility_level: None,
+            serialization_mode: None,
+            project_settings_refs: Vec::new(),
         }
     }
 }
@@ -230,6 +668,8 @@ pub struct TargetsSpec {
     #[serde(default)]
     pub min_sdk: HashMap<String, String>,
     pub test_platform: Option<String>,
+    #[serde(default)]
+    pub target_platforms: Vec<TargetPlatformSpec>,
 }
 
 impl Default for TargetsSpec {
@@ -238,6 +678,7 @@ impl Default for TargetsSpec {
             platforms: Vec::new(),
             min_sdk: HashMap::new(),
             test_platform: None,
+            target_platforms: Vec::new(),
         }
     }
 }
@@ -271,6 +712,8 @@ pub struct PackageEntry {
     pub name: String,
     pub reason: Option<String>,
     pub version: Option<String>,
+    #[serde(default)]
+    pub required_by_domain: Vec<String>,
 }
 
 impl Default for PackageEntry {
@@ -279,6 +722,7 @@ impl Default for PackageEntry {
             name: String::new(),
             reason: None,
             version: None,
+            required_by_domain: Vec::new(),
         }
     }
 }
@@ -297,6 +741,8 @@ pub struct PackagesSpec {
     #[serde(default)]
     pub required: Vec<PackageEntry>,
     #[serde(default)]
+    pub recommended: Vec<PackageEntry>,
+    #[serde(default)]
     pub forbidden: Vec<PackageEntry>,
     #[serde(default)]
     pub detected: Vec<PackageEntry>,
@@ -306,6 +752,7 @@ impl Default for PackagesSpec {
     fn default() -> Self {
         Self {
             required: Vec::new(),
+            recommended: Vec::new(),
             forbidden: Vec::new(),
             detected: Vec::new(),
         }
@@ -315,6 +762,9 @@ impl Default for PackagesSpec {
 impl PackagesSpec {
     pub fn validate(&self) -> Result<(), String> {
         for package in &self.required {
+            package.validate()?;
+        }
+        for package in &self.recommended {
             package.validate()?;
         }
         for package in &self.forbidden {
@@ -535,6 +985,167 @@ impl AssessmentResult {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectMeta {
+    pub game_title: Option<String>,
+    pub studio: Option<String>,
+    pub genre: Option<String>,
+    pub elevator_pitch: Option<String>,
+    pub development_stage: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DomainKind {
+    Experience,
+    Mechanics,
+    Technology,
+    Content,
+    Production,
+    Quality,
+    Custom,
+}
+
+impl Default for DomainKind {
+    fn default() -> Self { Self::Custom }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DomainStatus {
+    Undefined,
+    Draft,
+    Questioning,
+    Defined,
+    Validated,
+}
+
+impl Default for DomainStatus {
+    fn default() -> Self { Self::Undefined }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequirementPriority {
+    Must,
+    Should,
+    Could,
+    Wont,
+}
+
+impl Default for RequirementPriority {
+    fn default() -> Self { Self::Should }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequirementStatus {
+    Proposed,
+    Accepted,
+    Rejected,
+    Implemented,
+    Verified,
+}
+
+impl Default for RequirementStatus {
+    fn default() -> Self { Self::Proposed }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Requirement {
+    pub id: String,
+    pub text: String,
+    #[serde(default)]
+    pub priority: RequirementPriority,
+    #[serde(default)]
+    pub status: RequirementStatus,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+    pub rationale: Option<String>,
+    pub source_question: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub conflicts_with: Vec<String>,
+    pub confidence: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecLink {
+    pub kind: String,
+    pub id: String,
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DialecticState {
+    #[serde(default)]
+    pub questions: Vec<SpecQuestion>,
+    #[serde(default)]
+    pub decisions: Vec<SpecDecision>,
+    #[serde(default)]
+    pub assumptions: Vec<SpecAssumption>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpecQuestion {
+    pub id: String,
+    pub domain: Option<String>,
+    pub text: String,
+    pub answer: Option<String>,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+    pub answered_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpecDecision {
+    pub id: String,
+    pub domain: Option<String>,
+    pub text: String,
+    pub rationale: Option<String>,
+    pub source_question: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpecAssumption {
+    pub id: String,
+    pub text: String,
+    pub confidence: Option<f64>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoadmapSpec {
+    #[serde(default)]
+    pub tickets: Vec<RoadmapTicket>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoadmapTicket {
+    pub id: String,
+    pub title: String,
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub requirement_refs: Vec<String>,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TargetPlatformSpec {
+    pub name: String,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub build_settings: HashMap<String, String>,
+    #[serde(default)]
+    pub performance_budget: HashMap<String, String>,
+    #[serde(default)]
+    pub control_scheme_refs: Vec<String>,
+    #[serde(default)]
+    pub test_refs: Vec<String>,
+}
+
 fn validate_supported_version(version: &str) -> Result<(), String> {
     let mut parts = version.split('.');
     let major = parts.next().unwrap_or_default();
@@ -573,35 +1184,25 @@ fn clamp_score(value: f64) -> f64 {
 pub fn lux_init(project_path: &Path) -> Result<PathBuf> {
     let lux_path = project_path.join(".lux");
     let spec_path = lux_path.join("spec.json");
-    if spec_path.exists() {
-        bail!(".lux already exists; use lux_load instead");
+    let domains_path = ensure_lux_directories(project_path)?;
+
+    if !spec_path.exists() {
+        let now = Utc::now().to_rfc3339();
+        let mut spec: SpecProject = serde_json::from_str(&get_default_spec_json()?)
+            .context("failed to parse default spec template")?;
+        spec.project_id = Uuid::new_v4().to_string();
+        spec.project_name = project_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        spec.created_at = now.clone();
+        spec.updated_at = now;
+
+        let spec_json = serde_json::to_string_pretty(&spec).context("failed to serialize spec")?;
+        fs::write(&spec_path, spec_json)
+            .with_context(|| format!("failed to write {}", spec_path.display()))?;
     }
-
-    let domains_path = lux_path.join("domains");
-    fs::create_dir_all(&domains_path)
-        .with_context(|| format!("failed to create {}", domains_path.display()))?;
-
-    for directory in ["tickets", "logs", "backups", "sessions", "builds"] {
-        let path = lux_path.join(directory);
-        fs::create_dir_all(&path)
-            .with_context(|| format!("failed to create {}", path.display()))?;
-    }
-
-    let now = Utc::now().to_rfc3339();
-    let mut spec: SpecProject = serde_json::from_str(&get_default_spec_json()?)
-        .context("failed to parse default spec template")?;
-    spec.project_id = Uuid::new_v4().to_string();
-    spec.project_name = project_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_string();
-    spec.created_at = now.clone();
-    spec.updated_at = now;
-
-    let spec_json = serde_json::to_string_pretty(&spec).context("failed to serialize spec")?;
-    fs::write(&spec_path, spec_json)
-        .with_context(|| format!("failed to write {}", spec_path.display()))?;
 
     for (domain, template) in domain_templates() {
         let path = domains_path.join(format!("{domain}.md"));
@@ -620,6 +1221,60 @@ pub fn lux_init(project_path: &Path) -> Result<PathBuf> {
     Ok(lux_path)
 }
 
+fn ensure_lux_directories(project_path: &Path) -> Result<PathBuf> {
+    let lux_path = project_path.join(".lux");
+    let domains_path = lux_path.join("domains");
+    fs::create_dir_all(&domains_path)
+        .with_context(|| format!("failed to create {}", domains_path.display()))?;
+
+    for directory in ["tickets", "logs", "backups", "sessions", "builds"] {
+        let path = lux_path.join(directory);
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+    }
+
+    Ok(domains_path)
+}
+
+pub fn lux_reinit(project_path: &Path) -> Result<PathBuf> {
+    let lux_path = project_path.join(".lux");
+    if lux_path.exists() {
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S%f");
+        let staging_path = project_path.join(format!(".lux-reinit-{timestamp}.tmp"));
+        if staging_path.exists() {
+            fs::remove_dir_all(&staging_path)
+                .with_context(|| format!("failed to remove {}", staging_path.display()))?;
+        }
+
+        fs::rename(&lux_path, &staging_path).with_context(|| {
+            format!(
+                "failed to stage {} at {}",
+                lux_path.display(),
+                staging_path.display()
+            )
+        })?;
+
+        let backup_path = lux_path.join("backups").join(format!("reinit-{timestamp}"));
+        fs::create_dir_all(&backup_path)
+            .with_context(|| format!("failed to create {}", backup_path.display()))?;
+
+        for entry in fs::read_dir(&staging_path)
+            .with_context(|| format!("failed to read {}", staging_path.display()))?
+        {
+            let entry = entry.with_context(|| format!("failed to read {}", staging_path.display()))?;
+            let destination = backup_path.join(entry.file_name());
+            fs::rename(entry.path(), &destination).with_context(|| {
+                format!("failed to move backup entry to {}", destination.display())
+            })?;
+        }
+
+        fs::remove_dir_all(&staging_path)
+            .with_context(|| format!("failed to remove {}", staging_path.display()))?;
+    }
+
+    lux_init(project_path)
+}
+
 pub fn lux_load_or_init(project_path: &Path) -> Result<SpecProject> {
     if !project_path.join(".lux/spec.json").is_file() {
         lux_init(project_path)?;
@@ -631,8 +1286,80 @@ pub fn lux_load(project_path: &Path) -> Result<SpecProject> {
     let spec_path = project_path.join(".lux/spec.json");
     let content = fs::read_to_string(&spec_path)
         .with_context(|| format!("failed to read {}", spec_path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse {}", spec_path.display()))
+
+    let mut value: Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse JSON {}", spec_path.display()))?;
+
+    normalize_spec_value(&mut value);
+
+    let spec: SpecProject = serde_json::from_value(value)
+        .with_context(|| format!("failed to parse {}", spec_path.display()))?;
+
+    spec.validate()
+        .map_err(|error| anyhow::anyhow!("Validation error: {error}"))?;
+
+    Ok(spec)
+}
+
+fn normalize_spec_value(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+
+    if object.get("schema_version").is_none() {
+        object.insert(
+            "schema_version".to_string(),
+            Value::String("2.0".to_string()),
+        );
+    }
+
+    let project_name = object
+        .get("project_name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    if let Some(name) = project_name {
+        let meta = object
+            .entry("meta".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if meta.get("game_title").is_none() {
+            if let Some(meta_object) = meta.as_object_mut() {
+                meta_object.insert("game_title".to_string(), Value::String(name));
+            }
+        }
+    }
+
+    if let Some(domains) = object.get_mut("domains") {
+        let kind_map: HashMap<&str, &str> = [
+            ("design", "Experience"),
+            ("architecture", "Technology"),
+            ("art_style", "Content"),
+            ("audio", "Content"),
+            ("narrative", "Content"),
+            ("levels", "Content"),
+            ("ui_ux", "Experience"),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
+        for (key, kind) in &kind_map {
+            if let Some(domain) = domains.get_mut(*key) {
+                let defined = domain
+                    .get("defined")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                if let Some(domain_object) = domain.as_object_mut() {
+                    if !domain_object.contains_key("kind") {
+                        domain_object.insert("kind".to_string(), Value::String(kind.to_string()));
+                    }
+                    if !domain_object.contains_key("status") {
+                        let status = if defined { "Defined" } else { "Undefined" };
+                        domain_object.insert("status".to_string(), Value::String(status.to_string()));
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn lux_save(project_path: &Path, spec: &SpecProject) -> Result<()> {
@@ -772,4 +1499,123 @@ fn domain_templates() -> [(&'static str, &'static str); 9] {
         ("packages", include_str!("templates/packages.md")),
         ("testing", include_str!("templates/testing.md")),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestQuestionIo {
+        presented_detection: bool,
+        progress_reports: Vec<f64>,
+    }
+
+    impl TestQuestionIo {
+        fn new() -> Self {
+            Self {
+                presented_detection: false,
+                progress_reports: Vec::new(),
+            }
+        }
+    }
+
+    impl SpecQuestionIo for TestQuestionIo {
+        fn present_detection(&mut self, _detection: Option<&UnityProjectDetection>) -> Result<()> {
+            self.presented_detection = true;
+            Ok(())
+        }
+
+        fn ask(
+            &mut self,
+            _question: &TargetedQuestion,
+            _iteration: u32,
+            _max_iterations: u32,
+        ) -> Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn report_progress(&mut self, ambiguity_score: f64, _target_ambiguity: f64) -> Result<()> {
+            self.progress_reports.push(ambiguity_score);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn lux_init_on_existing_workspace_is_idempotent() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let first_path = lux_init(temp.path())?;
+        let first_spec = lux_load(temp.path())?;
+
+        let second_path = lux_init(temp.path())?;
+        let second_spec = lux_load(temp.path())?;
+
+        assert_eq!(first_path, second_path);
+        assert_eq!(first_spec.project_id, second_spec.project_id);
+        assert!(temp.path().join(".lux/domains/design.md").is_file());
+        assert!(temp.path().join(".lux/glossary.md").is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn lux_reinit_creates_backup_and_fresh_state() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        lux_init(temp.path())?;
+        let original_spec = lux_load(temp.path())?;
+        let marker_path = temp.path().join(".lux/logs/marker.txt");
+        fs::write(&marker_path, "preserved")?;
+
+        let lux_path = lux_reinit(temp.path())?;
+        let fresh_spec = lux_load(temp.path())?;
+
+        assert_eq!(lux_path, temp.path().join(".lux"));
+        assert_ne!(original_spec.project_id, fresh_spec.project_id);
+        assert!(!marker_path.exists());
+
+        let backup_root = temp.path().join(".lux/backups");
+        let mut backup_entries = fs::read_dir(&backup_root)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        backup_entries.sort();
+        let backup_path = backup_entries
+            .into_iter()
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("reinit-"))
+            })
+            .context("missing reinit backup")?;
+
+        assert!(backup_path.join("spec.json").is_file());
+        assert_eq!(fs::read_to_string(backup_path.join("logs/marker.txt"))?, "preserved");
+        Ok(())
+    }
+
+    #[test]
+    fn lux_init_interactive_existing_spec_loads_and_continues() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        lux_init(temp.path())?;
+        let mut spec = lux_load(temp.path())?;
+        spec.project_name = "ExistingSpec".to_string();
+        let project_id = spec.project_id.clone();
+        lux_save(temp.path(), &spec)?;
+
+        let mut io = TestQuestionIo::new();
+        let path = lux_init_interactive(
+            temp.path(),
+            &mut io,
+            LuxInitInteractiveOptions {
+                interactive: false,
+                target_ambiguity: 0.02,
+                max_iterations: 1,
+            },
+        )?;
+        let loaded = lux_load(temp.path())?;
+
+        assert_eq!(path, temp.path().join(".lux"));
+        assert_eq!(loaded.project_id, project_id);
+        assert_eq!(loaded.project_name, "ExistingSpec");
+        assert!(io.presented_detection);
+        assert_eq!(io.progress_reports.len(), 1);
+        Ok(())
+    }
 }

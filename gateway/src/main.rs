@@ -2,6 +2,7 @@ pub mod addon_auth;
 pub mod addon_routes;
 pub mod addon_store;
 pub mod ai_log;
+pub mod auto_update;
 pub mod capture;
 pub mod config;
 pub mod cross_platform;
@@ -37,7 +38,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, shells::Shell};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -65,6 +66,12 @@ pub struct Cli {
     /// Custom Lux config file path
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Skip automatic update check
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub no_update_check: bool,
+    /// Internal: run as background update worker
+    #[arg(long, global = true, hide = true, action = ArgAction::SetTrue)]
+    lux_update_worker: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -72,7 +79,7 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Initialize a .lux game harness workspace
-    Init(LuxProjectArgs),
+    Init(LuxInitArgs),
     /// Inspect, edit, and validate Lux game specs
     Spec(LuxSpecArgs),
     /// Show Lux kanban board status
@@ -116,6 +123,28 @@ struct LuxProjectArgs {
     /// Unity project root containing the .lux directory
     #[arg(long)]
     project_path: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+struct LuxInitArgs {
+    /// Unity project root containing the .lux directory
+    #[arg(long)]
+    project_path: Option<PathBuf>,
+    /// Enable the interactive spec question flow
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    interactive: bool,
+    /// Stop after a single non-interactive pass without asking questions
+    #[arg(long = "no-interactive", action = ArgAction::SetTrue)]
+    no_interactive: bool,
+    /// Target ambiguity threshold before stopping interactive questioning
+    #[arg(long, default_value_t = 0.02)]
+    target_ambiguity: f64,
+    /// Maximum interactive question rounds to run
+    #[arg(long, default_value_t = 10)]
+    max_iterations: u32,
+    /// Back up existing .lux workspace and initialize from scratch
+    #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+    force: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -349,6 +378,15 @@ struct McpArgs {
 enum McpAction {
     /// Run the LUX MCP server over newline-delimited JSON-RPC stdio
     Serve,
+    /// Register Lux as an MCP server in the project's OpenCode configuration
+    Register(McpRegisterArgs),
+}
+
+#[derive(Parser, Debug)]
+struct McpRegisterArgs {
+    /// Unity project root
+    #[arg(long)]
+    project_path: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -970,6 +1008,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if cli.lux_update_worker {
+        auto_update::run_update_worker().await?;
+        return Ok(());
+    }
+    auto_update::maybe_spawn_update_check(cli.no_update_check);
+
     if let Some(path) = cli.config.clone() {
         let _ = CONFIG_PATH_OVERRIDE.set(path);
     }
@@ -1539,10 +1583,33 @@ fn run_gui_command() -> anyhow::Result<()> {
     }
 }
 
-fn run_lux_init_command(args: LuxProjectArgs) -> anyhow::Result<()> {
+fn run_lux_init_command(args: LuxInitArgs) -> anyhow::Result<()> {
     let project_root = resolve_lux_project_root(&args.project_path)?;
-    let lux_path = lux_spec::lux_init(&project_root)?;
-    println!("Initialized Lux game harness at {}", lux_path.display());
+    let options = lux_spec::LuxInitInteractiveOptions {
+        interactive: if args.no_interactive {
+            false
+        } else {
+            args.interactive
+        },
+        target_ambiguity: args.target_ambiguity,
+        max_iterations: args.max_iterations,
+    };
+
+    let mut io = lux_spec::TerminalSpecQuestionIo;
+    if args.force {
+        lux_spec::lux_reinit(&project_root)?;
+    }
+    let lux_path = lux_spec::lux_init_interactive(&project_root, &mut io, options)?;
+    eprintln!("Initialized Lux at {}", lux_path.display());
+
+    if let Err(err) = register_mcp_in_opencode(&project_root) {
+        eprintln!("⚠️  Could not register Lux MCP in OpenCode: {err:#}");
+    }
+
+    if let Err(err) = install_opencode_plugin(&project_root) {
+        eprintln!("⚠️  Could not install Lux OpenCode plugin: {err:#}");
+    }
+
     Ok(())
 }
 
@@ -2026,7 +2093,117 @@ fn edit_config_file() -> anyhow::Result<()> {
 fn run_mcp_command(args: McpArgs) -> anyhow::Result<()> {
     match args.action {
         McpAction::Serve => mcp::run_stdio_server(mcp::create_lux_mcp_server()),
+        McpAction::Register(register_args) => run_mcp_register_command(register_args),
     }
+}
+
+fn run_mcp_register_command(args: McpRegisterArgs) -> anyhow::Result<()> {
+    let project_root = resolve_project_root(&args.project_path)?;
+    register_mcp_in_opencode(&project_root)
+}
+
+fn register_mcp_in_opencode(project_root: &Path) -> anyhow::Result<()> {
+    let opencode_path = project_root.join("opencode.json");
+    let mut config = if opencode_path.is_file() {
+        let text = fs::read_to_string(&opencode_path)
+            .with_context(|| format!("failed to read {}", opencode_path.display()))?;
+        serde_json::from_str::<Value>(&text)
+            .with_context(|| format!("failed to parse {}", opencode_path.display()))?
+    } else {
+        json!({})
+    };
+
+    if !config.is_object() {
+        bail!("{} must contain a JSON object", opencode_path.display());
+    }
+
+    let lux_command = resolve_lux_mcp_command()?;
+    let root_object = config.as_object_mut().expect("validated JSON object");
+    root_object.remove("mcpServers");
+
+    let mcp_config = root_object
+        .entry("mcp".to_string())
+        .or_insert_with(|| json!({}));
+    if !mcp_config.is_object() {
+        bail!("{}.mcp must be a JSON object", opencode_path.display());
+    }
+
+    mcp_config
+        .as_object_mut()
+        .expect("validated mcp object")
+        .insert(
+            "lux".to_string(),
+            json!({
+                "type": "local",
+                "command": [lux_command, "mcp", "serve"],
+            }),
+        );
+
+    let json_text = serde_json::to_string_pretty(&config).context("failed to serialize opencode config")?;
+    fs::write(&opencode_path, format!("{json_text}\n"))
+        .with_context(|| format!("failed to write {}", opencode_path.display()))?;
+    eprintln!("  Registered Lux MCP server in {}", opencode_path.display());
+    Ok(())
+}
+
+fn install_opencode_plugin(project_root: &Path) -> anyhow::Result<()> {
+    let plugin_dir = project_root.join(".opencode").join("plugins");
+    fs::create_dir_all(&plugin_dir)
+        .with_context(|| format!("failed to create {}", plugin_dir.display()))?;
+
+    let builtin_plugin = resolve_lux_install_root()
+        .join("plugins")
+        .join("opencode")
+        .join("lux-plugin.ts");
+    if !builtin_plugin.is_file() {
+        eprintln!(
+            "  Skipping OpenCode plugin install: {} not found",
+            builtin_plugin.display()
+        );
+        return Ok(());
+    }
+
+    let dest = plugin_dir.join("lux-plugin.ts");
+    let content = fs::read_to_string(&builtin_plugin)
+        .with_context(|| format!("failed to read {}", builtin_plugin.display()))?;
+    fs::write(&dest, &content)
+        .with_context(|| format!("failed to write {}", dest.display()))?;
+    eprintln!("  Installed Lux OpenCode plugin at {}", dest.display());
+    Ok(())
+}
+
+fn resolve_lux_install_root() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent().and_then(|p| p.parent()) {
+            let candidate = parent.join("lib").join("lux");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+fn resolve_lux_mcp_command() -> anyhow::Result<String> {
+    if let Ok(path) = std::env::current_exe() {
+        if path.is_file() {
+            return Ok(path.display().to_string());
+        }
+    }
+
+    let output = ProcessCommand::new("which")
+        .arg("lux")
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to resolve lux executable with which")?;
+    if !output.status.success() {
+        bail!("failed to resolve lux executable");
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        bail!("which lux returned an empty path");
+    }
+    Ok(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -4632,6 +4809,66 @@ fn install_bridge_files(args: BridgeInstallArgs) -> anyhow::Result<()> {
 
         eprintln!("  → Installed OpenCode plugin at {}", plugin_dir.display());
     }
+
+    // Install OpenCode command files (.opencode/commands/)
+    let commands_dir = opencode_dir.join("commands");
+    std::fs::create_dir_all(&commands_dir)
+        .with_context(|| format!("failed to create {}", commands_dir.display()))?;
+
+    let command_files = [
+        (
+            "lux-init.md",
+            include_str!("templates/commands/lux-init.md"),
+        ),
+        (
+            "lux-run.md",
+            include_str!("templates/commands/lux-run.md"),
+        ),
+        (
+            "lux-spec-validate.md",
+            include_str!("templates/commands/lux-spec-validate.md"),
+        ),
+        (
+            "lux-spec-edit.md",
+            include_str!("templates/commands/lux-spec-edit.md"),
+        ),
+        (
+            "lux-kanban.md",
+            include_str!("templates/commands/lux-kanban.md"),
+        ),
+        (
+            "lux-build.md",
+            include_str!("templates/commands/lux-build.md"),
+        ),
+        (
+            "lux-verify.md",
+            include_str!("templates/commands/lux-verify.md"),
+        ),
+        (
+            "lux-compile.md",
+            include_str!("templates/commands/lux-compile.md"),
+        ),
+        (
+            "lux-test.md",
+            include_str!("templates/commands/lux-test.md"),
+        ),
+        (
+            "lux-status.md",
+            include_str!("templates/commands/lux-status.md"),
+        ),
+    ];
+
+    for (name, content) in &command_files {
+        let path = commands_dir.join(name);
+        std::fs::write(&path, content)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+
+    eprintln!(
+        "  → Installed {} OpenCode commands at {}",
+        command_files.len(),
+        commands_dir.display()
+    );
 
     eprintln!("Bridge installed to {}", assets_editor.display());
     eprintln!("Open Unity Editor and wait for recompile. Menu 'AI Bridge' will appear.");

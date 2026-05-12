@@ -43,25 +43,24 @@ impl Drop for TestProject {
 fn domain(name: &str, ambiguity_score: f64) -> DomainSpec {
     let mut fields = HashMap::new();
     fields.insert("summary".to_string(), json!(format!("{name} summary")));
-    DomainSpec {
-        name: name.to_string(),
-        content_path: format!(".lux/domains/{name}.md"),
-        fields,
-        ambiguity_score,
-        last_evaluated: Some("2026-05-11T00:00:00Z".to_string()),
-        defined: true,
-    }
+    let mut domain = DomainSpec::new(name, format!(".lux/domains/{name}.md"), ambiguity_score);
+    domain.fields = fields;
+    domain.last_evaluated = Some("2026-05-11T00:00:00Z".to_string());
+    domain.defined = true;
+    domain
 }
 
 fn complete_spec() -> SpecProject {
     SpecProject {
         version: "1.0.0".to_string(),
+        schema_version: "2.0".to_string(),
         project_id: uuid::Uuid::new_v4().to_string(),
         project_name: "Verification Fixture".to_string(),
         created_at: "2026-05-11T00:00:00Z".to_string(),
         updated_at: "2026-05-11T00:00:10Z".to_string(),
         source: "test".to_string(),
         status: lux::lux_spec::SpecStatus::Active,
+        meta: lux::lux_spec::ProjectMeta::default(),
         domains: SpecDomains {
             design: Some(domain("design", 0.1)),
             architecture: Some(domain("architecture", 0.1)),
@@ -72,6 +71,8 @@ fn complete_spec() -> SpecProject {
             ui_ux: Some(domain("ui_ux", 0.1)),
             custom: HashMap::new(),
         },
+        dialectic: lux::lux_spec::DialecticState::default(),
+        roadmap: lux::lux_spec::RoadmapSpec::default(),
         unity: None,
         targets: None,
         packages: None,

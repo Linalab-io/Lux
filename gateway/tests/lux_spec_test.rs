@@ -1,5 +1,9 @@
+#[path = "../src/project.rs"]
+mod project;
 #[path = "../src/lux_spec.rs"]
 mod lux_spec;
+#[path = "../src/lux_ambiguity.rs"]
+mod lux_ambiguity;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -176,11 +180,13 @@ fn test_spec_new_fields_roundtrip() {
         detected_version: None,
         render_pipeline: Some("urp".to_string()),
         scripting_backend: Some("il2cpp".to_string()),
+        ..UnitySpec::default()
     });
     spec.targets = Some(TargetsSpec {
         platforms: vec!["android".to_string(), "ios".to_string()],
         min_sdk: HashMap::new(),
         test_platform: Some("android".to_string()),
+        target_platforms: Vec::new(),
     });
 
     let json = serde_json::to_string_pretty(&spec).expect("serialize");

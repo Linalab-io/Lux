@@ -1,0 +1,8 @@
+{
+  "latest_commit": "37b96ab9b974aa075fac140c6c6dd0ff636249be",
+  "install": {
+    "git": "https://github.com/islee23520/Lux.git",
+    "branch": "main",
+    "package": "lux"
+  }
+}

@@ -38,6 +38,10 @@ pub struct TargetedQuestion {
     pub phase: String,
     pub question: String,
     pub priority: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 pub fn calculate_ambiguity(spec: &SpecProject) -> AmbiguityReport {
@@ -61,6 +65,8 @@ pub fn calculate_ambiguity(spec: &SpecProject) -> AmbiguityReport {
                     priority: clamp_score(
                         (1.0 - analysis.composite_score) + (0.15 / (index + 1) as f64),
                     ),
+                    default_value: None,
+                    options: Vec::new(),
                 },
             ));
         }
@@ -156,14 +162,21 @@ fn analyze_spec_fields(spec: &SpecProject) -> SpecAmbiguity {
                     phase: "phase5_assessment".to_string(),
                     question: question.to_string(),
                     priority: clamp_score((1.0 - composite_score) + (*weight / total_weight) * 0.1),
+                    default_value: None,
+                    options: Vec::new(),
                 })
             }
         })
         .collect::<Vec<_>>();
 
+    let field_questions = spec_field_questions(spec);
+
     SpecAmbiguity {
         composite_score,
-        questions,
+        questions: field_questions
+            .into_iter()
+            .chain(questions)
+            .collect::<Vec<_>>(),
     }
 }
 
@@ -171,6 +184,102 @@ fn analyze_spec_fields(spec: &SpecProject) -> SpecAmbiguity {
 struct SpecAmbiguity {
     composite_score: f64,
     questions: Vec<TargetedQuestion>,
+}
+
+fn spec_field_questions(spec: &SpecProject) -> Vec<TargetedQuestion> {
+    let mut questions = Vec::new();
+
+    if spec
+        .unity
+        .as_ref()
+        .is_none_or(|unity| unity.required_version.as_ref().is_none_or(|value| value.trim().is_empty()))
+    {
+        let detected_version = spec
+            .unity
+            .as_ref()
+            .and_then(|u| u.detected_version.as_ref());
+        questions.push(TargetedQuestion {
+            domain: "spec".to_string(),
+            phase: "unity.required_version".to_string(),
+            question: "Which Unity version should this project require for all contributors?"
+                .to_string(),
+            priority: 0.9,
+            default_value: detected_version.cloned(),
+            options: Vec::new(),
+        });
+    }
+
+    if spec
+        .targets
+        .as_ref()
+        .is_none_or(|targets| targets.platforms.is_empty())
+    {
+        questions.push(TargetedQuestion {
+            domain: "spec".to_string(),
+            phase: "targets.platforms".to_string(),
+            question:
+                "Which build targets should Lux optimize for first? (comma-separated)"
+                    .to_string(),
+            priority: 0.85,
+            default_value: Some("windows, mac".to_string()),
+            options: vec![
+                "windows".to_string(),
+                "mac".to_string(),
+                "linux".to_string(),
+                "android".to_string(),
+                "ios".to_string(),
+                "webgl".to_string(),
+            ],
+        });
+    }
+
+    if spec
+        .packages
+        .as_ref()
+        .is_none_or(|packages| packages.required.is_empty())
+    {
+        let detected_packages: Vec<String> = spec
+            .packages
+            .as_ref()
+            .map(|p| p.detected.iter().map(|d| d.name.clone()).collect())
+            .unwrap_or_default();
+        questions.push(TargetedQuestion {
+            domain: "spec".to_string(),
+            phase: "packages.required".to_string(),
+            question: "Which Unity packages are mandatory for this project? (comma-separated package IDs)"
+                .to_string(),
+            priority: 0.7,
+            default_value: if detected_packages.is_empty() {
+                None
+            } else {
+                Some(detected_packages.join(", "))
+            },
+            options: Vec::new(),
+        });
+    }
+
+    if spec
+        .testing
+        .as_ref()
+        .is_none_or(|testing| testing.framework.as_ref().is_none_or(|value| value.trim().is_empty()))
+    {
+        questions.push(TargetedQuestion {
+            domain: "spec".to_string(),
+            phase: "testing.strategy".to_string(),
+            question: "What testing strategy should Lux enforce?".to_string(),
+            priority: 0.75,
+            default_value: Some("EditMode, PlayMode".to_string()),
+            options: vec![
+                "EditMode".to_string(),
+                "PlayMode".to_string(),
+                "coverage".to_string(),
+                "smoke".to_string(),
+                "integration".to_string(),
+            ],
+        });
+    }
+
+    questions
 }
 
 fn built_in_domains(

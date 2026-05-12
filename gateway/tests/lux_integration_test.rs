@@ -51,28 +51,34 @@ fn spec_round_trip_with_new_fields() {
         detected_version: Some("6000.0.30f1".to_string()),
         render_pipeline: Some("urp".to_string()),
         scripting_backend: Some("il2cpp".to_string()),
+        ..UnitySpec::default()
     });
     spec.targets = Some(TargetsSpec {
         platforms: vec!["android".to_string(), "ios".to_string()],
         min_sdk,
         test_platform: Some("android".to_string()),
+        target_platforms: Vec::new(),
     });
     spec.packages = Some(PackagesSpec {
         required: vec![PackageEntry {
             name: "com.unity.inputsystem".to_string(),
             reason: Some("player controls".to_string()),
             version: Some("1.7.0".to_string()),
+            required_by_domain: Vec::new(),
         }],
         forbidden: vec![PackageEntry {
             name: "com.unity.legacy".to_string(),
             reason: Some("avoid legacy APIs".to_string()),
             version: None,
+            required_by_domain: Vec::new(),
         }],
         detected: vec![PackageEntry {
             name: "com.unity.textmeshpro".to_string(),
             reason: None,
             version: Some("3.0.9".to_string()),
+            required_by_domain: Vec::new(),
         }],
+        recommended: Vec::new(),
     });
     spec.testing = Some(TestingSpec {
         framework: Some("unity-test-runner".to_string()),
@@ -164,18 +170,22 @@ fn spec_evaluation_with_target_ambiguity() {
         detected_version: Some("6000.0".to_string()),
         render_pipeline: Some("urp".to_string()),
         scripting_backend: Some("il2cpp".to_string()),
+        ..UnitySpec::default()
     });
     spec.targets = Some(TargetsSpec {
         platforms: vec!["macos".to_string()],
         min_sdk: HashMap::new(),
         test_platform: Some("macos".to_string()),
+        target_platforms: Vec::new(),
     });
     spec.packages = Some(PackagesSpec {
         required: vec![PackageEntry {
             name: "com.unity.inputsystem".to_string(),
             reason: Some("input".to_string()),
             version: None,
+            required_by_domain: Vec::new(),
         }],
+        recommended: Vec::new(),
         forbidden: Vec::new(),
         detected: Vec::new(),
     });
@@ -220,18 +230,22 @@ fn spec_lifecycle_init_evaluate_continue_with_new_fields() {
         detected_version: Some("6000.0".to_string()),
         render_pipeline: Some("urp".to_string()),
         scripting_backend: Some("il2cpp".to_string()),
+        ..UnitySpec::default()
     });
     spec.targets = Some(TargetsSpec {
         platforms: vec!["macos".to_string()],
         min_sdk: HashMap::new(),
         test_platform: Some("macos".to_string()),
+        target_platforms: Vec::new(),
     });
     spec.packages = Some(PackagesSpec {
         required: vec![PackageEntry {
             name: "com.unity.inputsystem".to_string(),
             reason: Some("input".to_string()),
             version: None,
+            required_by_domain: Vec::new(),
         }],
+        recommended: Vec::new(),
         forbidden: Vec::new(),
         detected: Vec::new(),
     });
