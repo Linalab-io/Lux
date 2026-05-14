@@ -3,14 +3,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use lux::lux_run_state::{RunState, RunStatus, StopReason};
 use lux::lux_spec::{lux_init, lux_load, lux_save, DomainSpec, PillarStatus, SpecProject};
 use lux::lux_team_profile::VerificationTier;
+use lux::lux_ticket::{
+    stable_blocker_ticket_id, FileTicketStore, Ticket, TicketFilter, TicketPriority, TicketStatus,
+    TicketStore,
+};
 use lux::lux_verification::{
     check_feedback_integration, check_implementation_exists, check_spec_completeness,
-    check_unity_compilable, check_webgl_playable, required_tier_for_action,
+    check_unity_compilable, check_webgl_playable, create_blocker_tickets, required_tier_for_action,
     run_t3_unity_gate_with_target, run_t3_unity_gate_with_target_and_timeouts, verify_all,
     weighted_average_score, CheckCategory, CheckResult, T3UnityGateTimeouts, VerificationMode,
-    T3_COMPILE_TIMEOUT_SECS, T3_SCENE_SMOKE_TIMEOUT_SECS,
+    VerificationResult, T3_COMPILE_TIMEOUT_SECS, T3_SCENE_SMOKE_TIMEOUT_SECS,
 };
 use lux::UnityLaunchTarget;
 use serde_json::{json, Value};
@@ -112,6 +117,46 @@ fn score_check(name: &str, category: CheckCategory, score: f64) -> CheckResult {
         message: String::new(),
         details: None,
     }
+}
+
+fn failing_result(name: &str, category: CheckCategory) -> VerificationResult {
+    VerificationResult {
+        passed: false,
+        timestamp: "2026-05-15T00:00:00Z".to_string(),
+        checks: vec![CheckResult {
+            name: name.to_string(),
+            category,
+            passed: false,
+            score: 0.0,
+            message: "verification evidence missing".to_string(),
+            details: None,
+        }],
+        overall_score: 0.0,
+        blocker_ticket_ids: Vec::new(),
+    }
+}
+
+fn test_ticket(id: &str, status: TicketStatus, blockers: Vec<String>) -> Ticket {
+    Ticket {
+        id: id.to_string(),
+        title: format!("Ticket {id}"),
+        description: "test ticket".to_string(),
+        status,
+        priority: TicketPriority::High,
+        assignee: None,
+        blockers,
+        tags: Vec::new(),
+        spec_ref: None,
+        created_at: "2026-05-15T00:00:00Z".to_string(),
+        updated_at: "2026-05-15T00:00:00Z".to_string(),
+    }
+}
+
+fn save_run_state(project_path: &Path, current_ticket_id: Option<&str>) {
+    let mut run_state = RunState::idle(project_path).expect("idle run state should be created");
+    run_state.status = RunStatus::Verifying.to_string();
+    run_state.current_ticket_id = current_ticket_id.map(ToOwned::to_owned);
+    run_state.save(project_path).expect("run state should save");
 }
 
 fn passed_t2_checks() -> Vec<CheckResult> {
@@ -517,4 +562,147 @@ fn lux_verification_live_mode_reports_not_implemented_without_cached_fallback() 
     assert!(result.checks.iter().all(|check| check
         .message
         .starts_with("Live verification not yet implemented for")));
+}
+
+#[test]
+fn lux_verification_quarantines_blocker_cycle() {
+    let project = TestProject::new("blocker-cycle");
+    let store = FileTicketStore::new(project.path());
+    let blocker_id = stable_blocker_ticket_id(
+        "unity-compilable",
+        "Cycle Check",
+        Some(".lux/verification/latest.json"),
+    );
+    store
+        .create(test_ticket(
+            &blocker_id,
+            TicketStatus::Blocked,
+            vec!["ticket-b".to_string()],
+        ))
+        .expect("blocker ticket should be created");
+    store
+        .create(test_ticket("ticket-b", TicketStatus::ToDo, Vec::new()))
+        .expect("blocked ticket should be created");
+    save_run_state(project.path(), Some("ticket-b"));
+
+    let error = create_blocker_tickets(
+        &failing_result("Cycle Check", CheckCategory::UnityCompilable),
+        project.path(),
+    )
+    .expect_err("cycle should quarantine run");
+
+    assert!(error
+        .to_string()
+        .contains(StopReason::BlockerCycleDetected.as_str()));
+    let run_state = RunState::load(project.path()).expect("run state should load");
+    assert_eq!(run_state.status, RunStatus::Quarantined.to_string());
+    assert_eq!(
+        run_state.last_error.as_deref(),
+        Some(StopReason::BlockerCycleDetected.as_str())
+    );
+}
+
+#[test]
+fn lux_verification_quarantines_after_blocker_attempt_limit() {
+    let project = TestProject::new("blocker-attempts");
+    save_run_state(project.path(), None);
+    let result = failing_result("Attempt Check", CheckCategory::UnityCompilable);
+
+    for _ in 0..3 {
+        create_blocker_tickets(&result, project.path()).expect("attempt should stay in bounds");
+    }
+    let error = create_blocker_tickets(&result, project.path())
+        .expect_err("fourth attempt should quarantine run");
+
+    assert!(error
+        .to_string()
+        .contains(StopReason::BlockerEscalationRequired.as_str()));
+    let run_state = RunState::load(project.path()).expect("run state should load");
+    assert_eq!(run_state.status, RunStatus::Quarantined.to_string());
+    assert_eq!(
+        run_state.last_error.as_deref(),
+        Some(StopReason::BlockerEscalationRequired.as_str())
+    );
+}
+
+#[test]
+fn lux_verification_repeated_same_failure_converges_to_one_blocker() {
+    let project = TestProject::new("blocker-idempotency");
+    save_run_state(project.path(), None);
+    let result = failing_result("Stable Check", CheckCategory::WebGLPlayable);
+
+    let first = create_blocker_tickets(&result, project.path()).expect("first blocker creation");
+    let second = create_blocker_tickets(&result, project.path()).expect("second blocker update");
+    let third = create_blocker_tickets(&result, project.path()).expect("third blocker update");
+
+    assert_eq!(first, second);
+    assert_eq!(second, third);
+    let tickets = FileTicketStore::new(project.path())
+        .list(TicketFilter::default())
+        .expect("tickets should list");
+    assert_eq!(tickets.len(), 1);
+}
+
+#[test]
+fn lux_verification_allows_blocked_ticket_after_blocker_done() {
+    let project = TestProject::new("blocker-resolution");
+    let store = FileTicketStore::new(project.path());
+    store
+        .create(test_ticket("ticket-a", TicketStatus::ToDo, Vec::new()))
+        .expect("target ticket should be created");
+    save_run_state(project.path(), Some("ticket-a"));
+
+    let blocker_ids = create_blocker_tickets(
+        &failing_result("Resolution Check", CheckCategory::ImplementationExists),
+        project.path(),
+    )
+    .expect("blocker should be created");
+    assert_eq!(blocker_ids.len(), 1);
+
+    let target = store
+        .get("ticket-a")
+        .expect("target ticket read")
+        .expect("target ticket exists");
+    assert_eq!(target.status, TicketStatus::Blocked);
+    assert_eq!(target.blockers, blocker_ids);
+
+    let mut blocked_target = target.clone();
+    blocked_target.status = TicketStatus::ToDo;
+    assert!(store.update("ticket-a", blocked_target).is_err());
+
+    let blocker_id = &target.blockers[0];
+    let mut blocker = store
+        .get(blocker_id)
+        .expect("blocker read")
+        .expect("blocker exists");
+    blocker.status = TicketStatus::ToDo;
+    let blocker = store
+        .update(blocker_id, blocker)
+        .expect("blocker should move to ToDo");
+    let mut blocker = blocker;
+    blocker.status = TicketStatus::InProgress;
+    let blocker = store
+        .update(blocker_id, blocker)
+        .expect("blocker should move to InProgress");
+    let mut blocker = blocker;
+    blocker.status = TicketStatus::Done;
+    store
+        .update(blocker_id, blocker)
+        .expect("blocker should move to Done");
+
+    let mut target = store
+        .get("ticket-a")
+        .expect("target read")
+        .expect("target exists");
+    target.status = TicketStatus::ToDo;
+    store
+        .update("ticket-a", target)
+        .expect("target should proceed after blocker is Done");
+
+    let run_state = RunState::load(project.path()).expect("run state should load");
+    assert!(run_state
+        .blocker_attempts
+        .values()
+        .all(|attempt| *attempt <= 3));
+    assert!(run_state.blocker_depth <= 3);
 }

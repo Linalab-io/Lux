@@ -76,6 +76,13 @@
 - `cargo build` clean; `cargo test --test lux_run_test` 3 passed, 0 failed.
 - Evidence files written to `.sisyphus/evidence/task-6-*.txt`.
 
+## [Task 4] Completed
+- Added RunState blocker metadata SSoT fields: `blocker_attempts`, `consecutive_blocker_generations`, and `blocker_depth`; `start_run` resets them for fresh runs.
+- Stable verification blocker identity is derived from `check_category + check_name + spec_ref`; `create_or_update_blocker` updates same-key blockers instead of creating duplicates.
+- Verification blocker creation now checks max depth 3, max attempts 3, max consecutive new blocker generations 2, and quarantines via `RunState::save()` with `blocker_cycle_detected` or `blocker_escalation_required`.
+- Ticket blocker relationships are checked for cycles before linking; `TaskDAG::topological_ids_checked()` rejects cycles explicitly instead of using the old fallback ordering.
+- Verification evidence: `cargo test --test lux_run_state_test`, `cargo test --test lux_verification_test`, `cargo test --test lux_run_test`, `cargo test --test lux_ticket_test`, and `cargo build` passed in one chained run.
+
 ## [Task 5] Completed
 - `required_tier_for_action("milestone_push")` now requires `VerificationTier::T3Gate`; general `push` remains T2.
 - T3 gate now requires all T2 checks to pass before invoking Unity batchmode compile and scene smoke.

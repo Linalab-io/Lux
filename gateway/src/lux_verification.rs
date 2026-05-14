@@ -329,11 +329,8 @@ pub fn create_blocker_tickets(
 
     for check in failed_checks {
         let category = category_tag(&check.category);
-        let stable_key = stable_blocker_key(
-            category,
-            &check.name,
-            Some(VERIFICATION_BLOCKER_SPEC_REF),
-        );
+        let stable_key =
+            stable_blocker_key(category, &check.name, Some(VERIFICATION_BLOCKER_SPEC_REF));
         let stable_id = stable_blocker_ticket_id_from_key(&stable_key);
         let next_attempt = run_state
             .blocker_attempts

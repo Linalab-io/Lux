@@ -49,6 +49,9 @@ fn test_run_state_idle_creates_valid_state() {
     assert_eq!(state.resume.checkpoint, None);
     assert_eq!(state.executor.kind, None);
     assert_eq!(state.last_error, None);
+    assert!(state.blocker_attempts.is_empty());
+    assert_eq!(state.consecutive_blocker_generations, 0);
+    assert_eq!(state.blocker_depth, 0);
     chrono::DateTime::parse_from_rfc3339(&state.updated_at).expect("updated_at should be RFC3339");
 }
 
@@ -71,6 +74,9 @@ fn test_run_state_save_load_roundtrip() {
     state.executor.job_id = Some("job-4".to_string());
     state.executor.heartbeat_at = Some("2026-05-14T00:00:01Z".to_string());
     state.last_error = Some("blocked by compiler".to_string());
+    state.blocker_attempts.insert("blocker-1".to_string(), 2);
+    state.consecutive_blocker_generations = 1;
+    state.blocker_depth = 2;
     state.updated_at = "2026-05-14T00:00:02Z".to_string();
 
     state.save(temp_dir.path()).expect("save should succeed");

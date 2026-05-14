@@ -199,6 +199,9 @@ pub fn start_run(args: &RunArgs) -> Result<RunLifecycle> {
     state.goal_id = args.goal.clone();
     state.current_ticket_id = None;
     state.last_error = None;
+    state.blocker_attempts.clear();
+    state.consecutive_blocker_generations = 0;
+    state.blocker_depth = 0;
     state.save(&project_path)?;
 
     let config = RunConfig {

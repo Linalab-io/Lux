@@ -18,8 +18,7 @@ struct TestTempDir {
 
 impl TestTempDir {
     fn new(name: &str) -> Self {
-        let path =
-            std::env::temp_dir().join(format!("lux-run-{name}-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("lux-run-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(path.join(".lux")).expect("temp .lux dir should be created");
         Self { path }
     }
@@ -97,11 +96,7 @@ fn execute_task_sets_awaiting_evidence_not_done() {
 
     execute_task(&mut lifecycle, task_id).expect("execute_task should succeed");
 
-    let node = lifecycle
-        .dag
-        .nodes
-        .get(task_id)
-        .expect("node should exist");
+    let node = lifecycle.dag.nodes.get(task_id).expect("node should exist");
 
     assert_eq!(
         node.status,
@@ -134,7 +129,10 @@ fn execute_task_dispatch_file_written_atomically() {
     let content = fs::read_to_string(&dispatch_path).expect("dispatch file should be readable");
     let parsed: serde_json::Value =
         serde_json::from_str(&content).expect("dispatch file should be valid JSON");
-    assert!(parsed.is_object(), "dispatch file should contain a JSON object");
+    assert!(
+        parsed.is_object(),
+        "dispatch file should contain a JSON object"
+    );
 }
 
 #[test]
@@ -167,4 +165,47 @@ fn awaiting_evidence_node_does_not_unblock_dependents() {
         ready.iter().all(|n| n.id != "child"),
         "child must not be ready while parent is AwaitingEvidence (not Done)"
     );
+}
+
+#[test]
+fn task_dag_rejects_explicit_cycle_without_fallback_ordering() {
+    let mut dag = TaskDAG::default();
+    dag.add_node(TaskNode {
+        id: "a".to_string(),
+        spec_clause_id: "a".to_string(),
+        title: "A".to_string(),
+        status: TaskStatus::Pending,
+        dependencies: vec![],
+        assignee: None,
+        evidence_path: None,
+        created_at: Utc::now().to_rfc3339(),
+    });
+    dag.add_node(TaskNode {
+        id: "b".to_string(),
+        spec_clause_id: "b".to_string(),
+        title: "B".to_string(),
+        status: TaskStatus::Pending,
+        dependencies: vec![],
+        assignee: None,
+        evidence_path: None,
+        created_at: Utc::now().to_rfc3339(),
+    });
+
+    dag.try_add_dependency("a", "b")
+        .expect("first dependency should be accepted");
+    let error = dag
+        .try_add_dependency("b", "a")
+        .expect_err("reverse dependency should be rejected");
+    assert!(error.contains("dependency cycle detected"));
+
+    dag.edges.push(("a".to_string(), "b".to_string()));
+    dag.nodes
+        .get_mut("b")
+        .expect("node b should exist")
+        .dependencies
+        .push("a".to_string());
+    let error = dag
+        .topological_ids_checked()
+        .expect_err("cycle must not fall back to arbitrary ordering");
+    assert!(error.contains("dependency cycle detected"));
 }

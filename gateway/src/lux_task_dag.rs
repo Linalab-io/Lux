@@ -67,6 +67,16 @@ impl TaskDAG {
     }
 
     pub fn add_dependency(&mut self, node_id: &str, dependency_id: &str) {
+        self.try_add_dependency(node_id, dependency_id)
+            .expect("TaskDAG dependency cycle detected");
+    }
+
+    pub fn try_add_dependency(&mut self, node_id: &str, dependency_id: &str) -> Result<(), String> {
+        if self.would_create_cycle(node_id, dependency_id) {
+            return Err(format!(
+                "dependency cycle detected: adding {dependency_id} before {node_id} would create a cycle"
+            ));
+        }
         if let Some(node) = self.nodes.get_mut(node_id) {
             let dependency = dependency_id.to_string();
             if !node.dependencies.contains(&dependency) {
@@ -78,6 +88,35 @@ impl TaskDAG {
             }
             self.rebuild_roots();
         }
+        Ok(())
+    }
+
+    pub fn would_create_cycle(&self, node_id: &str, dependency_id: &str) -> bool {
+        node_id == dependency_id || self.has_path(node_id, dependency_id)
+    }
+
+    pub fn has_path(&self, from_id: &str, to_id: &str) -> bool {
+        if from_id == to_id {
+            return true;
+        }
+        let mut stack = vec![from_id.to_string()];
+        let mut visited = HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            for (_, dependent) in self
+                .edges
+                .iter()
+                .filter(|(dependency, _)| dependency == &current)
+            {
+                if dependent == to_id {
+                    return true;
+                }
+                stack.push(dependent.clone());
+            }
+        }
+        false
     }
 
     pub fn ready_nodes(&self) -> Vec<TaskNode> {
@@ -217,7 +256,7 @@ impl TaskDAG {
         self.root_ids = roots;
     }
 
-    fn topological_ids(&self) -> Vec<String> {
+    pub fn topological_ids_checked(&self) -> Result<Vec<String>, String> {
         let mut emitted = HashSet::new();
         let mut ordered = Vec::new();
         let mut ids = self.nodes.keys().cloned().collect::<Vec<_>>();
@@ -240,15 +279,24 @@ impl TaskDAG {
                 }
             }
             if ordered.len() == before {
-                for id in &ids {
-                    if emitted.insert(id.clone()) {
-                        ordered.push(id.clone());
-                    }
-                }
+                let remaining = ids
+                    .iter()
+                    .filter(|id| !emitted.contains(*id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "dependency cycle detected among task node(s): {}",
+                    remaining.join(", ")
+                ));
             }
         }
 
-        ordered
+        Ok(ordered)
+    }
+
+    fn topological_ids(&self) -> Vec<String> {
+        self.topological_ids_checked()
+            .expect("TaskDAG contains a dependency cycle")
     }
 }
 

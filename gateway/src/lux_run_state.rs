@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -177,6 +178,12 @@ pub struct RunState {
     #[serde(default)]
     pub consecutive_failures: u32,
     #[serde(default)]
+    pub blocker_attempts: HashMap<String, u32>,
+    #[serde(default)]
+    pub consecutive_blocker_generations: u32,
+    #[serde(default)]
+    pub blocker_depth: u32,
+    #[serde(default)]
     pub continuation_config: ContinuationRunConfig,
     pub pre_task_git_sha: Option<String>,
     pub team_run_id: Option<String>,
@@ -221,6 +228,9 @@ impl RunState {
             continuation_count: 0,
             stagnation_count: 0,
             consecutive_failures: 0,
+            blocker_attempts: HashMap::new(),
+            consecutive_blocker_generations: 0,
+            blocker_depth: 0,
             continuation_config: ContinuationRunConfig::default(),
             pre_task_git_sha: None,
             team_run_id: None,
@@ -306,6 +316,50 @@ impl RunState {
     pub fn validate(&self) -> Result<()> {
         self.status.parse::<RunStatus>()?;
         Ok(())
+    }
+
+    /// Apply a partial continuation update with optimistic concurrency guard.
+    ///
+    /// Loads the current state from disk, validates that `expected_seq` matches
+    /// the on-disk `seq`, applies the provided `patch` closure, increments `seq`,
+    /// and atomically saves. Returns the saved state on success.
+    ///
+    /// Returns `Err` with a message containing "seq conflict" when `expected_seq`
+    /// does not match the current on-disk `seq`.
+    pub fn update_with_seq_check<F>(
+        project_path: &Path,
+        expected_seq: u64,
+        expected_status: Option<&str>,
+        patch: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&mut Self),
+    {
+        let mut state = Self::load(project_path)?;
+
+        if state.seq != expected_seq {
+            bail!(
+                "seq conflict: expected {} but current seq is {}",
+                expected_seq,
+                state.seq
+            );
+        }
+
+        if let Some(required_status) = expected_status {
+            if state.status != required_status {
+                bail!(
+                    "status conflict: expected '{}' but current status is '{}'",
+                    required_status,
+                    state.status
+                );
+            }
+        }
+
+        patch(&mut state);
+        state.seq += 1;
+        state.updated_at = Utc::now().to_rfc3339();
+        state.save(project_path)?;
+        Ok(state)
     }
 
     /// Transition status. Returns new state with incremented seq and updated timestamp.
