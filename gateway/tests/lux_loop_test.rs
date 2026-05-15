@@ -6,6 +6,7 @@ use std::{
 
 use lux::lux_events::{EventRouter, LuxEvent};
 use lux::lux_loop::{ApprovalGate, LoopOrchestrator, LoopState};
+use lux::lux_run_state::RunState;
 use lux::lux_spec::{lux_init, lux_load, lux_save};
 use serde_json::json;
 
@@ -18,6 +19,7 @@ impl TestProject {
         let path = std::env::temp_dir().join(format!("lux-loop-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
         lux_init(&path).unwrap();
+        RunState::idle(&path).unwrap().save(&path).unwrap();
         let mut spec = lux_load(&path).unwrap();
         spec.overall_ambiguity = 1.0;
         lux_save(&path, &spec).unwrap();

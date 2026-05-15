@@ -78,7 +78,10 @@ export async function writeContinuationState(
   }
 
   const body = await response.json() as { seq?: number }
-  return { seq: body.seq ?? opts.expectedSeq + 1 }
+  if (typeof body.seq !== "number") {
+    throw new Error(`continuation state write response missing seq (got: ${JSON.stringify(body.seq)})`)
+  }
+  return { seq: body.seq }
 }
 
 export async function updateContinuationState(

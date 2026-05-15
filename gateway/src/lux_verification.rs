@@ -434,7 +434,10 @@ fn load_or_initialize_run_state(project_path: &Path) -> Result<RunState> {
     if RunState::path(project_path).exists() {
         RunState::load(project_path)
     } else {
-        RunState::idle(project_path)
+        bail!(
+            "run-state.json not found at {}; run `lux init` first",
+            RunState::path(project_path).display()
+        )
     }
 }
 

@@ -24,6 +24,7 @@ use lux::lux_spec::{
 use lux::lux_ticket::{
     FileTicketStore, Ticket, TicketFilter, TicketPriority, TicketStatus, TicketStore,
 };
+use lux::lux_run_state::RunState;
 use lux::lux_verification::{verify_all, CheckCategory, VerificationMode};
 use serde_json::json;
 use tempfile::TempDir;
@@ -271,7 +272,12 @@ fn initialized_project() -> E2eProject {
 }
 
 fn initialize_lux_project(project_path: &Path) -> PathBuf {
-    lux_init(project_path).expect("lux init should create project metadata")
+    let spec_path = lux_init(project_path).expect("lux init should create project metadata");
+    RunState::idle(project_path)
+        .expect("idle run state should be created")
+        .save(project_path)
+        .expect("run state should save");
+    spec_path
 }
 
 fn run_mock_ai_spec_generation(project_path: &Path) -> SpecProject {

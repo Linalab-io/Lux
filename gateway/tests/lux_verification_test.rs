@@ -38,6 +38,10 @@ impl TestProject {
 
     fn init_with_complete_spec(&self) -> SpecProject {
         lux_init(&self.path).expect("lux workspace should initialize");
+        RunState::idle(&self.path)
+            .expect("idle run state should construct")
+            .save(&self.path)
+            .expect("run-state.json should save");
         let mut spec = lux_load(&self.path).expect("spec should load");
         make_spec_complete(&mut spec);
         lux_save(&self.path, &spec).expect("complete spec should save");
@@ -398,6 +402,11 @@ fn lux_verification_verify_all_reports_mixed_cached_results() {
 #[test]
 fn lux_verification_verify_all_reports_all_fail_when_no_cached_evidence_exists() {
     let project = TestProject::new("verify-all-fail");
+    lux_init(project.path()).expect("lux workspace should initialize");
+    RunState::idle(project.path())
+        .expect("idle run state should construct")
+        .save(project.path())
+        .expect("run-state.json should save");
     let logs_dir = project.path().join(".lux/logs");
     fs::create_dir_all(&logs_dir).expect("logs directory should be created");
     fs::write(logs_dir.join("playtest.feedback.json"), "{}").expect("feedback should be written");
@@ -705,4 +714,36 @@ fn lux_verification_allows_blocked_ticket_after_blocker_done() {
         .values()
         .all(|attempt| *attempt <= 3));
     assert!(run_state.blocker_depth <= 3);
+}
+
+#[test]
+fn test_create_blocker_tickets_errors_when_run_state_missing() {
+    let project = TestProject::new("no-run-state");
+    lux_init(project.path()).expect("lux_init should succeed");
+    RunState::idle(project.path())
+        .expect("idle run state should construct")
+        .save(project.path())
+        .expect("run-state.json should save");
+
+    let result = lux::lux_verification::verify_all(project.path(), VerificationMode::Cached);
+    let verification = result.expect("verify_all should return a result");
+    fs::remove_file(project.path().join(".lux/run-state.json"))
+        .expect("run-state.json should be removable");
+    let failed_result = VerificationResult {
+        checks: vec![CheckResult {
+            name: "dummy".to_string(),
+            category: CheckCategory::SpecCompleteness,
+            passed: false,
+            score: 0.0,
+            message: "forced failure".to_string(),
+            details: None,
+        }],
+        ..verification
+    };
+    let err = create_blocker_tickets(&failed_result, project.path())
+        .expect_err("create_blocker_tickets must error when run-state.json is missing");
+    assert!(
+        err.to_string().contains("run-state.json not found"),
+        "unexpected error: {err}"
+    );
 }

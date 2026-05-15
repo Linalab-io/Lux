@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -16,14 +16,27 @@ pub enum ContinuationStatus {
 }
 
 impl ContinuationStatus {
-    pub fn from_run_status(status: &str) -> Self {
-        match status.to_ascii_lowercase().as_str() {
+    pub fn from_run_status(status: &str) -> Result<Self> {
+        let lower = status.to_ascii_lowercase();
+        Ok(match lower.as_str() {
             "idle" => Self::Idle,
-            "active" | "running" | "awaitingapproval" | "awaiting_approval" => Self::Active,
-            "stopped" | "completed" => Self::Stopped,
-            "error" | "failed" => Self::Error,
-            _ => Self::Idle,
-        }
+            "planning"
+            | "awaitingapproval"
+            | "awaitingevidence"
+            | "executingticket"
+            | "verifying"
+            | "awaitingplaystart"
+            | "awaitingfeedback"
+            | "paused"
+            | "blocked"
+            | "recovering"
+            | "active"
+            | "running"
+            | "awaiting_approval" => Self::Active,
+            "completed" | "stopped" | "interrupted" | "quarantined" => Self::Stopped,
+            "failed" | "error" => Self::Error,
+            _ => bail!("unknown ContinuationStatus mapping for RunStatus: {status}"),
+        })
     }
 }
 

@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -723,5 +724,44 @@ fn test_migration_rollback_preserves_legacy_on_failed_post_write_validation() {
     assert!(
         !lux_dir.join("continuation-state.json.deprecated").exists(),
         "deprecated file must NOT exist when migration failed before rename"
+    );
+}
+
+#[test]
+fn test_migration_rollback_preserves_legacy_on_save_failure() {
+    let temp_dir = TestTempDir::new("migration-rollback-save-failure");
+    let lux_dir = temp_dir.path().join(".lux");
+
+    write_legacy_state(
+        &temp_dir,
+        json!({
+            "current_ticket_id": "ticket-save-fail",
+            "status": "Active",
+            "inFlight": false
+        }),
+    );
+
+    let permissions = std::fs::Permissions::from_mode(0o555);
+    std::fs::set_permissions(&lux_dir, permissions).expect("chmod 0o555 should succeed");
+
+    let result = RunState::migrate_legacy_continuation_state(temp_dir.path());
+
+    let restore_permissions = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(&lux_dir, restore_permissions).expect("chmod 0o755 should succeed");
+
+    assert!(result.is_err(), "migration should fail when .lux dir is read-only");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("legacy continuation migration failed") || err_msg.contains("failed to write"),
+        "error should indicate migration failure, got: {err_msg}"
+    );
+
+    assert!(
+        lux_dir.join("continuation-state.json").exists(),
+        "legacy continuation-state.json must be preserved when migration fails"
+    );
+    assert!(
+        !lux_dir.join("continuation-state.json.deprecated").exists(),
+        "deprecated file must NOT exist when migration failed"
     );
 }

@@ -1664,7 +1664,8 @@ async fn get_continuation_state(
         last_ambiguity: None,
         last_ticket_baseline: None,
         current_ticket_id: run_state.current_ticket_id.clone(),
-        status: crate::lux_continuation_state::ContinuationStatus::from_run_status(&run_state.status),
+        status: crate::lux_continuation_state::ContinuationStatus::from_run_status(&run_state.status)
+            .map_err(internal_error)?,
         started_at: run_state.resume.previous_status.clone(),
         updated_at: run_state.updated_at.clone(),
         stop_reason: run_state.stop_reason.clone(),
