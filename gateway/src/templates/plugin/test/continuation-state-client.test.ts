@@ -34,13 +34,7 @@ describe('continuation-state-client', () => {
   })
 
   describe('readContinuationState', () => {
-    it('returns default state when file does not exist', async () => {
-      const state = await readContinuationState({ gatewayUrl: 'http://localhost:18766', projectPath })
-      expect(state.status).toBe('Idle')
-      expect(state.continuation_count).toBe(0)
-    })
-
-    it('returns parsed state when file exists', async () => {
+    it('returns parsed state when gateway responds ok', async () => {
       const mockState = {
         session_id: 'test-session',
         continuation_count: 5,
@@ -66,14 +60,24 @@ describe('continuation-state-client', () => {
       expect(state.status).toBe('Active')
     })
 
-    it('returns default state when file is corrupt', async () => {
+    it('throws when gateway returns non-ok response', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
+        status: 500,
+        text: async () => 'internal server error',
       })
 
-      const state = await readContinuationState({ gatewayUrl: 'http://localhost:18766', projectPath })
-      expect(state.status).toBe('Idle')
-      expect(state.continuation_count).toBe(0)
+      await expect(
+        readContinuationState({ gatewayUrl: 'http://localhost:18766', projectPath })
+      ).rejects.toThrow('HTTP 500')
+    })
+
+    it('throws when gateway fetch throws (network error)', async () => {
+      mockFetch.mockRejectedValue(new Error('network failure'))
+
+      await expect(
+        readContinuationState({ gatewayUrl: 'http://localhost:18766', projectPath })
+      ).rejects.toThrow('network failure')
     })
   })
 
@@ -114,11 +118,19 @@ describe('continuation-state-client', () => {
     })
 
     it('throws on non-ok response', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({}),
-      })
-      const state = await readContinuationState({ gatewayUrl: 'http://localhost:18766', projectPath })
+      const state: ContinuationState = {
+        session_id: null,
+        continuation_count: 0,
+        stagnation_count: 0,
+        consecutive_failures: 0,
+        last_ambiguity: null,
+        last_ticket_baseline: null,
+        current_ticket_id: null,
+        status: 'Idle',
+        started_at: null,
+        updated_at: new Date().toISOString(),
+        stop_reason: null,
+      }
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -130,11 +142,19 @@ describe('continuation-state-client', () => {
     })
 
     it('returns fallback seq when response body has no seq field', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({}),
-      })
-      const state = await readContinuationState({ gatewayUrl: 'http://localhost:18766', projectPath })
+      const state: ContinuationState = {
+        session_id: null,
+        continuation_count: 0,
+        stagnation_count: 0,
+        consecutive_failures: 0,
+        last_ambiguity: null,
+        last_ticket_baseline: null,
+        current_ticket_id: null,
+        status: 'Idle',
+        started_at: null,
+        updated_at: new Date().toISOString(),
+        stop_reason: null,
+      }
 
       mockFetch.mockResolvedValueOnce({
         ok: true,

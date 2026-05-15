@@ -56,7 +56,7 @@ export function getContinuationCount(projectPath: string, gatewayState?: Continu
   if (gatewayState !== undefined) {
     return gatewayState.continuation_count
   }
-  return getOrCreateState(projectPath).continuationCount
+  return 0
 }
 
 export function canContinue(projectPath: string, config: LuxPluginConfig, gatewayState?: ContinuationState): boolean {

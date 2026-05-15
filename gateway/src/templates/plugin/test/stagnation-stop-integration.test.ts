@@ -43,7 +43,7 @@ describe("stagnation-stop-integration", () => {
     })
 
     expect(stopDecision.shouldStop).toBe(true)
-    expect(stopDecision.reason).toBe("stagnation")
+    expect(stopDecision.reason).toBe("stagnation_limit")
   })
 
   it("should reset stagnation and allow continuation when progress is made", () => {
@@ -66,7 +66,7 @@ describe("stagnation-stop-integration", () => {
       clarificationTicketInProgress: false,
     })
 
-    if (stopDecision.reason === "all_complete") {
+    if (stopDecision.reason === "milestone_complete") {
         expect(stopDecision.shouldStop).toBe(true)
     } else {
         expect(stopDecision.shouldStop).toBe(false)

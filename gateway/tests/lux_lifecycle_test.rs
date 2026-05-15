@@ -227,7 +227,19 @@ fn write_t3_evidence(project_path: &Path, name: &str) -> PathBuf {
         .join(name)
         .join("evidence.json");
     fs::create_dir_all(path.parent().unwrap()).expect("evidence dir should be created");
-    fs::write(&path, "{\"passed\":true}").expect("evidence should be written");
+    let evidence_json = serde_json::json!({
+        "base": {
+            "passed": true,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "checks": [],
+            "overall_score": 1.0,
+            "blocker_ticket_ids": []
+        },
+        "tier_results": [],
+        "overall_tier": "T3Gate",
+        "domain_tiers": {}
+    });
+    fs::write(&path, evidence_json.to_string()).expect("evidence should be written");
     path
 }
 

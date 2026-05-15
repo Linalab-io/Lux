@@ -1,5 +1,22 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
+vi.mock('../continuation-state-client', () => ({
+  readContinuationState: vi.fn().mockResolvedValue({
+    session_id: null,
+    continuation_count: 0,
+    stagnation_count: 0,
+    consecutive_failures: 0,
+    last_ambiguity: null,
+    last_ticket_baseline: null,
+    current_ticket_id: null,
+    status: 'Idle',
+    started_at: null,
+    updated_at: new Date().toISOString(),
+    stop_reason: null,
+  }),
+  writeContinuationState: vi.fn().mockResolvedValue({ ok: true, seq: 1 }),
+}))
+
 vi.mock('../compile-guard', () => ({
   checkAndFixCompile: vi.fn(),
 }))

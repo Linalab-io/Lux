@@ -15,6 +15,18 @@ pub enum ContinuationStatus {
     Error,
 }
 
+impl ContinuationStatus {
+    pub fn from_run_status(status: &str) -> Self {
+        match status.to_ascii_lowercase().as_str() {
+            "idle" => Self::Idle,
+            "active" | "running" | "awaitingapproval" | "awaiting_approval" => Self::Active,
+            "stopped" | "completed" => Self::Stopped,
+            "error" | "failed" => Self::Error,
+            _ => Self::Idle,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContinuationState {
     pub session_id: Option<String>,
@@ -45,7 +57,7 @@ impl ContinuationState {
             .with_context(|| format!("failed to parse continuation state file {}", path.display()))
     }
 
-    /// Save state to .lux/continuation-state.json
+    #[deprecated(note = "legacy write path — use RunState via gateway API instead")]
     pub fn save(&self, project_path: &Path) -> Result<()> {
         let path = Self::state_path(project_path);
         if let Some(parent) = path.parent() {
@@ -87,6 +99,7 @@ impl ContinuationState {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use std::path::Path;

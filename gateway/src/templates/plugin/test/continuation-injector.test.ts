@@ -49,18 +49,8 @@ describe("continuation-injector", () => {
     })
 
     it("should return false when count reaches max", () => {
-      const evalResult: LuxEvalResult = {
-        should_continue: true,
-        next_action: "test",
-        ambiguity_score: 0.5,
-        continuation_count: 0,
-      }
-      
-      for (let i = 0; i < 10; i++) {
-        decideContinuation(projectPath, evalResult, defaultConfig)
-      }
-      
-      expect(canContinue(projectPath, defaultConfig)).toBe(false)
+      const gatewayState = { continuation_count: 10, status: "Active" as const, consecutive_failures: 0 }
+      expect(canContinue(projectPath, defaultConfig, gatewayState)).toBe(false)
     })
   })
 
@@ -148,11 +138,11 @@ describe("continuation-injector", () => {
       }
 
       resetSession(countPath)
-      expect(getContinuationCount(countPath)).toBe(0)
+      expect(getContinuationCount(countPath, { continuation_count: 0, status: "Active", consecutive_failures: 0 })).toBe(0)
 
-      decideContinuation(countPath, evalResult, defaultConfig)
+      const result = decideContinuation(countPath, evalResult, defaultConfig)
 
-      expect(getContinuationCount(countPath)).toBe(1)
+      expect(result.continuationCount).toBe(1)
     })
 
     it("should not inject when evaluation says not to continue", () => {

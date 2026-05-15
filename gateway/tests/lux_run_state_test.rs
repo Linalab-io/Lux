@@ -3,11 +3,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lux::lux_run_state::{
-    ApprovalGateType, ContinuationRunConfig, RunState, RunStatus, StopReason,
-    RUN_STATE_SCHEMA_VERSION,
+use axum::{
+    body::{to_bytes, Body},
+    http::{header, Method, Request, StatusCode},
 };
-use serde_json::json;
+use lux::{
+    addon_auth::AddonAuthConfig,
+    lux_roadmap::{RoadmapPhase, RoadmapPhaseStatus, RoadmapReality},
+    lux_run_state::{
+        ApprovalGateType, ContinuationRunConfig, RunState, RunStatus, StopReason,
+        RUN_STATE_SCHEMA_VERSION,
+    },
+    server::{router, GatewayConfig, GatewayState},
+};
+use serde_json::{json, Value};
+use tower::ServiceExt;
 
 struct TestTempDir {
     path: PathBuf,
@@ -474,4 +484,207 @@ fn test_update_with_seq_check_concurrent_writes_second_fails() {
     let final_state = RunState::load(temp_dir.path()).expect("state should be loadable");
     assert_eq!(final_state.seq, 1);
     assert_eq!(final_state.status, "Planning");
+}
+
+const API_TOKEN: &str = "lux-continuation-api-token";
+
+struct TempProject {
+    path: PathBuf,
+}
+
+impl TempProject {
+    fn new(tag: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("lux-cont-api-{tag}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&path).expect("create temp project");
+        Self { path }
+    }
+}
+
+impl Drop for TempProject {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn test_gateway_state() -> GatewayState {
+    GatewayState::new(GatewayConfig {
+        token: API_TOKEN.to_string(),
+        history_capacity: 16,
+        project_root: None,
+        addon_auth: AddonAuthConfig {
+            github_client_id: "lux-cont-api-client".to_string(),
+            github_client_secret: None,
+        },
+    })
+}
+
+fn put_request(uri: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(Method::PUT)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("build PUT request")
+}
+
+#[tokio::test]
+async fn test_put_continuation_state_updates_run_state_json_only() {
+    let proj = TempProject::new("put");
+    let lux_dir = proj.path.join(".lux");
+    fs::create_dir_all(&lux_dir).expect("create .lux dir");
+
+    let initial = RunState::idle(&proj.path).expect("idle state");
+    initial
+        .save(&proj.path)
+        .expect("save initial run-state.json");
+
+    let app = router(test_gateway_state());
+    let uri = format!(
+        "/api/lux/continuation/state?project_path={}",
+        proj.path.to_str().unwrap().replace(' ', "%20")
+    );
+    let body = json!({
+        "expected_seq": 0,
+        "continuation_count": 3,
+        "status": "Active"
+    });
+    let resp = app
+        .oneshot(put_request(&uri, body))
+        .await
+        .expect("request should complete");
+
+    assert_eq!(resp.status(), StatusCode::OK, "PUT should return 200");
+
+    let run_state_path = lux_dir.join("run-state.json");
+    assert!(run_state_path.exists(), "run-state.json must exist");
+
+    let legacy_path = lux_dir.join("continuation-state.json");
+    assert!(
+        !legacy_path.exists(),
+        "legacy continuation-state.json must NOT be created"
+    );
+
+    let updated = RunState::load(&proj.path).expect("load updated run-state");
+    assert_eq!(updated.continuation_count, 3);
+    assert_eq!(updated.seq, 1);
+}
+
+#[tokio::test]
+async fn test_put_continuation_state_stale_seq_returns_409() {
+    let proj = TempProject::new("409");
+    let lux_dir = proj.path.join(".lux");
+    fs::create_dir_all(&lux_dir).expect("create .lux dir");
+
+    let initial = RunState::idle(&proj.path).expect("idle state");
+    initial
+        .save(&proj.path)
+        .expect("save initial run-state.json");
+
+    let app = router(test_gateway_state());
+    let uri = format!(
+        "/api/lux/continuation/state?project_path={}",
+        proj.path.to_str().unwrap().replace(' ', "%20")
+    );
+
+    let body_stale = json!({
+        "expected_seq": 99,
+        "continuation_count": 1,
+        "status": "Active"
+    });
+    let resp = app
+        .oneshot(put_request(&uri, body_stale))
+        .await
+        .expect("request should complete");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "stale seq should return 409 Conflict"
+    );
+}
+
+#[tokio::test]
+async fn test_put_continuation_state_status_conflict_returns_409() {
+    let proj = TempProject::new("status-conflict");
+    let lux_dir = proj.path.join(".lux");
+    fs::create_dir_all(&lux_dir).expect("create .lux dir");
+
+    let mut initial = RunState::idle(&proj.path).expect("idle state");
+    initial.status = RunStatus::Planning.to_string();
+    initial.save(&proj.path).expect("save initial run-state.json");
+
+    let app = router(test_gateway_state());
+    let uri = format!(
+        "/api/lux/continuation/state?project_path={}",
+        proj.path.to_str().unwrap().replace(' ', "%20")
+    );
+
+    let body = json!({
+        "expected_seq": 0,
+        "expected_status": "ExecutingTicket",
+        "continuation_count": 1
+    });
+    let resp = app
+        .oneshot(put_request(&uri, body))
+        .await
+        .expect("request should complete");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "mismatched expected_status should return 409 Conflict"
+    );
+}
+
+#[test]
+fn test_roadmap_pushed_phase_requires_pushed_at_and_push_git_sha() {
+    let roadmap = RoadmapReality {
+        schema_version: "1.0".to_string(),
+        updated_at: "2026-05-14T00:00:00Z".to_string(),
+        phases: vec![RoadmapPhase {
+            name: "phase-a".to_string(),
+            status: RoadmapPhaseStatus::Pushed,
+            evidence_path: None,
+            pushed_at: None,
+            push_git_sha: None,
+            push_evidence_path: None,
+        }],
+        capabilities: vec![],
+        evidence_refs: vec![],
+        experimental_flags: std::collections::HashMap::new(),
+        authoritative: true,
+    };
+
+    let err = roadmap.validate().expect_err("Pushed phase without pushed_at should fail validation");
+    assert!(
+        err.to_string().contains("pushed_at"),
+        "error should mention pushed_at, got: {err}"
+    );
+}
+
+#[test]
+fn test_run_state_save_rollback_on_failed_post_write_validation() {
+    let temp_dir = TestTempDir::new("post-write-rollback");
+    let mut state = RunState::idle(temp_dir.path()).expect("idle state should be created");
+    state.save(temp_dir.path()).expect("initial save should succeed");
+
+    let original = fs::read_to_string(RunState::path(temp_dir.path()))
+        .expect("original run-state should exist");
+
+    state.status = "Planning".to_string();
+    state.save(temp_dir.path()).expect("valid transition should succeed");
+
+    let path = RunState::path(temp_dir.path());
+    let valid_content = fs::read_to_string(&path).expect("valid run-state should exist");
+
+    fs::write(&path, valid_content.replace("\"Planning\"", "\"Active\""))
+        .expect("corrupt the on-disk file to simulate post-write validation failure");
+
+    let load_err = RunState::load(temp_dir.path())
+        .expect_err("corrupted status should fail load");
+    assert!(
+        load_err.to_string().contains("unknown RunStatus: Active"),
+        "unexpected error: {load_err}"
+    );
 }

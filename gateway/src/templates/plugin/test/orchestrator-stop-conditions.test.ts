@@ -115,14 +115,14 @@ describe('ContinuationOrchestrator Stop Conditions (T5.4)', () => {
   it('stops when all_complete is reached', async () => {
     vi.mocked(evaluateStopConditions).mockReturnValueOnce({
       shouldStop: true,
-      reason: 'all_complete',
+      reason: 'milestone_complete',
     } as any)
 
     const result = await orchestrator.onTrigger('test')
-    expect(result.stopReason).toBe('all_complete')
+    expect(result.stopReason).toBe('milestone_complete')
     expect(mockDeps.stateClient.writeContinuationState).toHaveBeenCalledWith(
       expect.objectContaining({ projectPath: '/test/project' }),
-      expect.objectContaining({ status: 'Complete', stop_reason: 'all_complete' })
+      expect.objectContaining({ status: 'Complete', stop_reason: 'milestone_complete' })
     )
   })
 
@@ -153,11 +153,11 @@ describe('ContinuationOrchestrator Stop Conditions (T5.4)', () => {
   it('stops when stagnation is detected', async () => {
     vi.mocked(evaluateStopConditions).mockReturnValueOnce({
       shouldStop: true,
-      reason: 'stagnation',
+      reason: 'stagnation_limit',
     } as any)
 
     const result = await orchestrator.onTrigger('test')
-    expect(result.stopReason).toBe('stagnation')
+    expect(result.stopReason).toBe('stagnation_limit')
   })
 
   it('returns continuation_state_error without persisting stopped state', async () => {

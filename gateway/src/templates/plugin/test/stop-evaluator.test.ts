@@ -93,7 +93,7 @@ describe("stop-evaluator", () => {
     it("should stop when stagnation details signal stop", () => {
       const details: StagnationDetails = { ...mockStagnation, shouldStop: true }
       const result = evaluateStagnationStop(details)
-      expect(result?.reason).toBe("stagnation")
+      expect(result?.reason).toBe("stagnation_limit")
     })
   })
 
@@ -120,7 +120,7 @@ describe("stop-evaluator", () => {
   describe("evaluateAllCompleteStop", () => {
     it("should stop when no active tickets remain", () => {
       const result = evaluateAllCompleteStop([])
-      expect(result?.reason).toBe("all_complete")
+      expect(result?.reason).toBe("milestone_complete")
     })
 
     it("should not stop when tickets are active", () => {
@@ -156,7 +156,7 @@ describe("stop-evaluator", () => {
         { status: "Error", consecutive_failures: 3 },
         DEFAULT_STOP_CONFIG
       )
-      expect(result?.reason).toBe("consecutive_state_error")
+      expect(result?.reason).toBe("consecutive_failure_limit")
     })
 
     it("should return null when failure threshold is not met", () => {
@@ -189,7 +189,7 @@ describe("stop-evaluator", () => {
         clarificationTicketInProgress: false,
       }
       const result = evaluateStopConditions(context)
-      expect(result.reason).toBe("all_complete")
+      expect(result.reason).toBe("milestone_complete")
     })
 
     it("should return noStopDecision if no conditions met", () => {
@@ -233,11 +233,11 @@ describe("stop-evaluator", () => {
 
       expect(getStopReasonMessage("max_continuations_reached", context)).toContain("max_continuations_reached")
       expect(getStopReasonMessage("user_abort", context)).toContain("user_abort")
-      expect(getStopReasonMessage("stagnation", context)).toContain("health_degraded")
+      expect(getStopReasonMessage("stagnation_limit", context)).toContain("health_degraded")
       expect(getStopReasonMessage("health_critical", context)).toContain("health_critical")
-      expect(getStopReasonMessage("all_complete", context)).toContain("all_complete")
+      expect(getStopReasonMessage("milestone_complete", context)).toContain("milestone_complete")
       expect(getStopReasonMessage("ambiguity_too_high", context)).toContain("ambiguity_too_high")
-      expect(getStopReasonMessage("consecutive_state_error", context)).toContain("consecutive_state_error")
+      expect(getStopReasonMessage("consecutive_failure_limit", context)).toContain("consecutive_failure_limit")
     })
 
     it("should format health critical details", () => {

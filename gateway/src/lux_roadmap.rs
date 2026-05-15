@@ -227,6 +227,17 @@ impl RoadmapReality {
             }
             if phase.status == RoadmapPhaseStatus::Pushed {
                 require_pushed_field(path, phase, "pushed_at", phase.pushed_at.as_deref())?;
+                if let Some(pushed_at) = phase.pushed_at.as_deref() {
+                    chrono::DateTime::parse_from_rfc3339(pushed_at).map_err(|_| {
+                        RoadmapError::Invalid {
+                            path: path.to_path_buf(),
+                            message: format!(
+                                "phase {} pushed_at is not a valid RFC3339 timestamp: {}",
+                                phase.name, pushed_at
+                            ),
+                        }
+                    })?;
+                }
                 require_pushed_field(path, phase, "push_git_sha", phase.push_git_sha.as_deref())?;
                 require_pushed_field(
                     path,

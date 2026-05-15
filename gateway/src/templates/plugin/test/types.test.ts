@@ -70,11 +70,11 @@ describe('Lux Plugin Types', () => {
       const reasons: StopReason[] = [
       'max_continuations_reached',
         'user_abort',
-        'stagnation',
+        'stagnation_limit',
         'health_critical',
-        'all_complete',
+        'milestone_complete',
         'ambiguity_too_high',
-        'consecutive_state_error',
+        'consecutive_failure_limit',
         null
       ]
       expect(reasons).toHaveLength(8)

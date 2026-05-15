@@ -67,11 +67,11 @@ export interface OrchestratorDeps {
 export type StopReason =
   | "max_continuations_reached"
   | "user_abort"
-  | "stagnation"
+  | "stagnation_limit"
   | "health_critical"
-  | "all_complete"
+  | "milestone_complete"
   | "ambiguity_too_high"
-  | "consecutive_state_error"
+  | "consecutive_failure_limit"
   | null
 
 export interface CycleResult {
@@ -275,7 +275,7 @@ export class ContinuationOrchestrator {
       },
     })
     if (stopDecision.shouldStop && stopDecision.reason) {
-      const stopLevel = stopDecision.reason === "all_complete" ? ("info" as const) : ("warn" as const)
+      const stopLevel = stopDecision.reason === "milestone_complete" ? ("info" as const) : ("warn" as const)
         const stopToast = buildToastMessage(stopLevel, [
           `⛔ Lux stopped: ${stopDecision.reason}`,
           formatStatus(
@@ -284,14 +284,14 @@ export class ContinuationOrchestrator {
         ),
       ])
       void this.ctx.client?.tui?.showToast?.({ body: stopToast })
-      if (stopDecision.reason === "all_complete") {
-        contState = await this.persist(contState, { status: "Complete", stop_reason: "all_complete" }, this.lastKnownSeq)
-        return this.result(false, "all_complete", null, "all_complete")
+      if (stopDecision.reason === "milestone_complete") {
+        contState = await this.persist(contState, { status: "Complete", stop_reason: "milestone_complete" }, this.lastKnownSeq)
+        return this.result(false, "milestone_complete", null, "milestone_complete")
       }
-      if (stopDecision.reason === "consecutive_state_error") {
+      if (stopDecision.reason === "consecutive_failure_limit") {
         return this.result(false, stopDecision.reason, contState.current_ticket_id, "continuation_state_error")
       }
-      if (stopDecision.reason === "stagnation") {
+      if (stopDecision.reason === "stagnation_limit") {
         this.lastDispatchTime = now - this.config.minContinuationIntervalMs + getBackoffDelayMs("unknown", Math.max(1, stagnation.reasons.length))
       }
       contState = await this.persist(contState, { status: "Stopped", stop_reason: stopDecision.reason, stagnation_count: this.state.stagnationCount, consecutive_failures: this.state.consecutiveFailures }, this.lastKnownSeq)

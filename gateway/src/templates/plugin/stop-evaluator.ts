@@ -1,14 +1,26 @@
 import type { StagnationDetails } from "./stagnation-detection"
 import type { LuxSessionState } from "./session-state"
 
+/**
+ * Stop reasons that are persisted to the gateway via PUT /api/lux/continuation/state
+ * must use the canonical Rust StopReason string values from lux_run_state.rs.
+ *
+ * Canonical gateway values (must match Rust StopReason::as_str()):
+ *   "max_continuations_reached", "stagnation_limit", "consecutive_failure_limit",
+ *   "milestone_complete", "max_iterations_reached", "blocker_escalation_required",
+ *   "blocker_cycle_detected"
+ *
+ * Internal-only values (never persisted to gateway, TypeScript plugin use only):
+ *   "user_abort", "health_critical", "ambiguity_too_high"
+ */
 export type StopReason =
   | "max_continuations_reached"
   | "user_abort"
-  | "stagnation"
+  | "stagnation_limit"
   | "health_critical"
-  | "all_complete"
+  | "milestone_complete"
   | "ambiguity_too_high"
-  | "consecutive_state_error"
+  | "consecutive_failure_limit"
 
 export interface StopDecision {
   shouldStop: boolean
@@ -96,7 +108,7 @@ export function evaluateUserAbortStop(state: LuxSessionState): StopDecision | nu
  * Triggers when the enhanced stagnation detector marks the session as stop-worthy.
  */
 export function evaluateStagnationStop(details: StagnationDetails): StopDecision | null {
-  return details.shouldStop ? stopDecision("stagnation", 0.92) : null
+  return details.shouldStop ? stopDecision("stagnation_limit", 0.92) : null
 }
 
 /**
@@ -116,7 +128,7 @@ export function evaluateHealthCriticalStop(
  * Triggers when no active tickets remain to drive the continuation loop.
  */
 export function evaluateAllCompleteStop(activeTickets: ReadonlyArray<StopTicketLike>): StopDecision | null {
-  return activeTickets.length === 0 ? stopDecision("all_complete", 0.99) : null
+  return activeTickets.length === 0 ? stopDecision("milestone_complete", 0.99) : null
 }
 
 /**
@@ -140,7 +152,7 @@ export function evaluateConsecutiveStateErrorStop(
   config: StopConfig,
 ): StopDecision | null {
   return continuationState.status === "Error" && continuationState.consecutive_failures >= config.consecutiveFailuresThreshold
-    ? stopDecision("consecutive_state_error", 0.97)
+    ? stopDecision("consecutive_failure_limit", 0.97)
     : null
 }
 
@@ -172,15 +184,15 @@ export function getStopReasonMessage(
       return `[stop-evaluator] max_continuations_reached: continuationCount ${context.state.continuationCount} >= ${config.maxContinuations}`
     case "user_abort":
       return `[stop-evaluator] user_abort: abortDetectedAt=${context.state.abortDetectedAt ?? "none"}, tokenLimitDetected=${context.state.tokenLimitDetected === true}`
-    case "stagnation":
-      return `[stop-evaluator] stagnation: ${context.stagnationDetails.reasons.join(",") || "stop-worthy stagnation detected"}`
+    case "stagnation_limit":
+      return `[stop-evaluator] stagnation_limit: ${context.stagnationDetails.reasons.join(",") || "stop-worthy stagnation detected"}`
     case "health_critical":
       return `[stop-evaluator] health_critical: healthScore ${context.stagnationDetails.healthScore ?? "unknown"} < ${config.healthThreshold}, consecutiveFailures ${context.state.consecutiveFailures} >= ${config.consecutiveFailuresThreshold}`
-    case "all_complete":
-      return `[stop-evaluator] all_complete: activeTickets=${context.activeTickets.length}`
+    case "milestone_complete":
+      return `[stop-evaluator] milestone_complete: activeTickets=${context.activeTickets.length}`
     case "ambiguity_too_high":
       return `[stop-evaluator] ambiguity_too_high: ambiguity ${context.ambiguity} > ${config.ambiguityThreshold}, clarificationTicketInProgress=${context.clarificationTicketInProgress}`
-    case "consecutive_state_error":
-      return `[stop-evaluator] consecutive_state_error: continuationState.status=${context.continuationState.status}, consecutive_failures=${context.continuationState.consecutive_failures} >= ${config.consecutiveFailuresThreshold}`
+    case "consecutive_failure_limit":
+      return `[stop-evaluator] consecutive_failure_limit: continuationState.status=${context.continuationState.status}, consecutive_failures=${context.continuationState.consecutive_failures} >= ${config.consecutiveFailuresThreshold}`
   }
 }

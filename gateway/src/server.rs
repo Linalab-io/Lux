@@ -1726,7 +1726,7 @@ async fn update_continuation_state(
                 s.resume.previous_status = Some(v);
             }
             if let Some(v) = body.stop_reason.clone() {
-                s.last_error = Some(v);
+                s.stop_reason = Some(v);
             }
         },
     )
